@@ -1,0 +1,191 @@
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+import pandas as pd
+import io
+from sqlalchemy.orm import Session
+from app.database import SessionLocal, Company, Claim, User, AuditLog, init_db
+from app.modules.diagnostics.validator import validate_insurance_csv
+from app.modules.actuarial.engine import ActuarialEngine
+from app.auth import (
+    get_db, get_current_user, create_access_token,
+    verify_password, get_password_hash, OAuth2PasswordRequestForm
+)
+from fastapi.security import OAuth2PasswordRequestForm
+
+app = FastAPI(title="B2B Insurance SaaS - Actuarial Core")
+
+init_db()
+
+def log_action(db: Session, user: User, action: str, details: str):
+    audit = AuditLog(company_id=user.company_id, user_id=user.id, action=action, details=details)
+    db.add(audit)
+    db.commit()
+
+@app.post("/token")
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Email o contraseña incorrectos")
+
+    access_token = create_access_token(data={"sub": str(user.id)})
+    return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id}
+
+@app.post("/setup/company")
+async def create_company(name: str, tax_id: str, admin_email: str, password: str, db: Session = Depends(get_db)):
+    company = Company(name=name, tax_id=tax_id)
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+
+    admin_user = User(
+        company_id=company.id,
+        email=admin_email,
+        hashed_password=get_password_hash(password),
+        role="admin"
+    )
+    db.add(admin_user)
+    db.commit()
+    return {"status": "success", "company_id": company.id, "admin_email": admin_email}
+
+@app.post("/upload-csv")
+async def upload_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="El archivo debe ser un CSV")
+
+    contents = await file.read()
+    df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
+    validation = validate_insurance_csv(df)
+
+    if not validation.is_valid:
+        return {"status": "error", "errors": validation.errors}
+
+    company_id = current_user.company_id
+    db.query(Claim).filter(Claim.company_id == company_id).delete()
+
+    for _, row in df.iterrows():
+        claim = Claim(
+            company_id=company_id,
+            external_id=row['id_siniestro'],
+            occurrence_date=pd.to_datetime(row['fecha_ocurrencia']).date(),
+            report_date=pd.to_datetime(row['fecha_reporte']).date(),
+            amount_paid=float(row['monto_pagado']),
+            amount_reserve=float(row['monto_reserva']),
+            ramo=row['ramo'],
+            policy_id=row['id_poliza']
+        )
+        db.add(claim)
+
+    db.commit()
+    log_action(db, current_user, "UPLOAD_CSV", f"Carga de {len(df)} siniestros")
+    return {"status": "success", "message": f"Datos cargados para la compañía {company_id}"}
+
+def get_df_from_db(db: Session, company_id: int):
+    claims = db.query(Claim).filter(Claim.company_id == company_id).all()
+    if not claims: return None
+    data = [{'id_siniestro': c.external_id, 'fecha_ocurrencia': c.occurrence_date,
+             'fecha_reporte': c.report_date, 'monto_pagado': c.amount_paid,
+             'monto_reserva': c.amount_reserve, 'ramo': c.ramo, 'id_poliza': c.policy_id} for c in claims]
+    return pd.DataFrame(data)
+
+@app.get("/actuarial/analysis")
+async def get_analysis(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    df = get_df_from_db(db, current_user.company_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df)
+    triangle = engine.build_triangle(ramo=ramo)
+    ibnr_results = engine.calculate_ibnr(triangle)
+    comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=ramo)
+    metrics = engine.analyze_frequency_severity(ramo=ramo)
+    severity_dist = engine.analyze_severity_distribution(ramo=ramo)
+
+    return {
+        "company_id": current_user.company_id,
+        "ramo": ramo if ramo else "Global",
+        "ibnr": ibnr_results,
+        "comparison": comparison,
+        "metrics": metrics,
+        "severity_distribution": severity_dist
+    }
+
+@app.get("/actuarial/projections")
+async def get_projections(
+    ramo: str = Query(None),
+    severity_adj: float = Query(1.0),
+    capital: float = Query(1000000.0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df = get_df_from_db(db, current_user.company_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df)
+    triangle = engine.build_triangle(ramo=ramo)
+    simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
+    reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
+    contract = engine.engineer_contract(ramo=ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+
+    return {
+        "company_id": current_user.company_id,
+        "scenario": {"severity_adjustment": severity_adj, "projected_ibnr": simulated_ibnr["ibnr_estimate"]},
+        "reinsurance_strategy": reinsurance,
+        "contract_engineering": contract
+    }
+
+@app.get("/actuarial/contract-draft")
+async def get_contract_draft(
+    ramo: str = Query(None),
+    severity_adj: float = Query(1.0),
+    capital: float = Query(1000000.0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df = get_df_from_db(db, current_user.company_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df)
+    triangle = engine.build_triangle(ramo=ramo)
+    simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
+    reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
+    contract_info = engine.engineer_contract(ramo=ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+
+    draft = engine.generate_contract_draft(ramo=ramo if ramo else "Global", contract_data=contract_info, ibnr=simulated_ibnr["ibnr_estimate"])
+    log_action(db, current_user, "GENERATE_CONTRACT", f"Borrador generado para ramo {ramo}")
+
+    return draft
+
+@app.get("/reports/executive")
+async def get_executive_report(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    df = get_df_from_db(db, current_user.company_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df)
+    triangle = engine.build_triangle(ramo=ramo)
+    ibnr_res = engine.calculate_ibnr(triangle)
+    comp = engine.compare_reserves(ibnr_res["ibnr_estimate"], ramo=ramo)
+    metrics = engine.analyze_frequency_severity(ramo=ramo)
+    sev_dist = engine.analyze_severity_distribution(ramo=ramo)
+
+    return {
+        "executive_summary": {
+            "company": current_user.company.name if current_user.company else "SaaS Customer",
+            "analysis_date": datetime.datetime.utcnow().isoformat(),
+            "overall_solvency": comp["status"],
+            "total_technical_reserve": ibnr_res["ibnr_estimate"],
+            "reserve_gap": comp["diferencia"],
+            "risk_profile": "Alta Volatilidad" if sev_dist["outlier_percentage"] > 5 else "Riesgo Estable"
+        },
+        "key_metrics": {
+            "frequency": metrics["frecuencia"],
+            "severity": metrics["severidad"],
+            "catastrophic_claims_impact": sev_dist["outlier_sum"]
+        },
+        "recommendation": "Sugerimos revisar los límites de reaseguro debido a la presencia de siniestros atípicos" if sev_dist["outlier_count"] > 0 else "Cartera estable, retención actual sostenible"
+    }

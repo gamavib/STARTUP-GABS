@@ -1,0 +1,2 @@
+SaaS Actuarial Setup
+fastapi\nuvicorn\npandas\nchainladder\nsqlalchemy\npsycopg2-binary\npython-jose[cryptography]\npasslib[bcrypt]\nnumpy
