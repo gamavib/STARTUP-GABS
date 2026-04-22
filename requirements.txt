@@ -1,2 +1,12 @@
-SaaS Actuarial Setup
-fastapi\nuvicorn\npandas\nchainladder\nsqlalchemy\npsycopg2-binary\npython-jose[cryptography]\npasslib[bcrypt]\nnumpy
+fastapi
+uvicorn
+pandas
+chainladder
+sqlalchemy
+psycopg2-binary
+python-jose[cryptography]
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+numpy
+python-multipart
+pydantic[email]

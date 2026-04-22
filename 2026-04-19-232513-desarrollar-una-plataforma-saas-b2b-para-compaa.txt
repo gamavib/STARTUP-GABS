@@ -2882,7 +2882,7 @@ API" completed (exit code 0)
   He diseñado este dataset específicamente para que el sistema detecte
   escenarios interesantes:
   1. ** la mayoría de los siniestros son estables** (para que el sistema sugiera
-   contratos de Quota Share en algunos ramos).
+   
   2. Incluí algunos siniestros catastróficos (Outliers) en el ramo de
   "Incendio", lo que obligará al sistema a detectar alta volatilidad y sugerir
   un contrato de Excess of Loss (XoL).

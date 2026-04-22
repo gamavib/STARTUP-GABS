@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 import pandas as pd
 import io
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal, Company, Claim, User, AuditLog, init_db
 from app.modules.diagnostics.validator import validate_insurance_csv
 from app.modules.actuarial.engine import ActuarialEngine
@@ -10,6 +11,8 @@ from app.auth import (
     verify_password, get_password_hash, OAuth2PasswordRequestForm
 )
 from fastapi.security import OAuth2PasswordRequestForm
+from app.schemas import CompanySetup
+
 
 app = FastAPI(title="B2B Insurance SaaS - Actuarial Core")
 
@@ -29,22 +32,44 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     access_token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id}
 
-@app.post("/setup/company")
-async def create_company(name: str, tax_id: str, admin_email: str, password: str, db: Session = Depends(get_db)):
-    company = Company(name=name, tax_id=tax_id)
-    db.add(company)
-    db.commit()
-    db.refresh(company)
+@app.post("/debug/test")
+async def debug_test(data: dict):
+    print(f"DEBUG DATA RECEIVED: {data}")
+    return {"received": data}
 
-    admin_user = User(
-        company_id=company.id,
-        email=admin_email,
-        hashed_password=get_password_hash(password),
-        role="admin"
-    )
-    db.add(admin_user)
-    db.commit()
-    return {"status": "success", "company_id": company.id, "admin_email": admin_email}
+@app.post("/setup/company")
+async def create_company(setup_data: CompanySetup, db: Session = Depends(get_db)):
+    try:
+        company = Company(name=setup_data.name, tax_id=setup_data.tax_id)
+        db.add(company)
+        db.commit()
+        db.refresh(company)
+
+        admin_user = User(
+            company_id=company.id,
+            email=setup_data.admin_email,
+            hashed_password=get_password_hash(setup_data.password),
+            role="admin"
+        )
+        db.add(admin_user)
+        db.commit()
+        return {"status": "success", "company_id": company.id, "admin_email": setup_data.admin_email}
+    except IntegrityError as e:
+        db.rollback()
+        error_msg = str(e.orig).lower()
+        if "name" in error_msg:
+            detail = "El nombre de la compañía ya existe."
+        elif "tax_id" in error_msg:
+            detail = "El NIT/Tax ID ya está registrado."
+        elif "email" in error_msg:
+            detail = "El correo electrónico del administrador ya está en uso."
+        else:
+            detail = "Conflicto de datos: el registro ya existe."
+        raise HTTPException(status_code=400, detail=detail)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
 
 @app.post("/upload-csv")
 async def upload_csv(

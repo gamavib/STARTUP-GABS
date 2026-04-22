@@ -6,7 +6,10 @@
       "Bash(git commit *)",
       "Bash(git remote *)",
       "Bash(git branch *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(psql -h db -U postgres -d insurance_saas)",
+      "Bash(docker exec *)",
+      "Bash(curl *)"
     ]
   }
 }

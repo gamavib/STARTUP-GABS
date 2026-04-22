@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker, relationship
 import datetime
 
 # En producción, esto vendría de una variable de entorno
-DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/insurance_saas"
+DATABASE_URL = "postgresql://postgres:postgres@db:5432/insurance_saas"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

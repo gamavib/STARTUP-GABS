@@ -1,0 +1,22 @@
+CERRAR
+docker compose down
+CERRAR Y ELIMINAR TODO
+docker compose down -v
+CONSTRUIR IMAGEN SIN CACHE
+docker-compose build --no-cache
+
+  # 1. Detiene y elimina contenedores, redes y volúmenes asociados al proyecto
+  docker compose down -v
+
+  # 2. Elimina todas las imágenes huérfanas y caché de construcción del sistema
+  docker builder prune -a -f
+
+  # 3. Construye desde cero y levanta
+  docker compose up -d --build
+
+
+ docker-compose down                                       
+  docker-compose up -d
+
+ # Construye las imágenes y levanta los contenedores en segundo plano
+  docker-compose up -d --build
