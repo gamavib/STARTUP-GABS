@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { api } from '../services/api';
 
-const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) => {
+const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange }) => {
     const [triangleData, setTriangleData] = useState(initialTriangleData);
     const [ramo, setRamo] = useState(initialRamo || '');
     const [metric, setMetric] = useState(initialTriangleData?.metric || 'paid');
     const [loading, setLoading] = useState(false);
+    const [ibnrResults, setIbnrResults] = useState(null);
+    const [customLdfs, setCustomLdfs] = useState([]);
 
     const fetchTriangle = async (selectedRamo, selectedMetric) => {
         if (!token) {
@@ -21,8 +23,29 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) =>
                 token: token
             });
             setTriangleData(data);
+
+            // Calcular IBNR inicial basándonos en los datos del triángulo
+            await calculateIBNR(selectedRamo, selectedMetric, []);
         } catch (error) {
             alert('Error al actualizar los datos del triángulo');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const calculateIBNR = async (selectedRamo, selectedMetric, ldfs) => {
+        setLoading(true);
+        try {
+            const results = await api.calculateCustomIBNR({
+                ramo: selectedRamo,
+                metric: selectedMetric,
+                customLdfs: ldfs,
+                severityAdj: 1.0,
+                token: token
+            });
+            setIbnrResults(results);
+        } catch (error) {
+            console.error("Error calculating IBNR:", error);
         } finally {
             setLoading(false);
         }
@@ -31,6 +54,9 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) =>
     const handleRamoChange = (e) => {
         const newRamo = e.target.value;
         setRamo(newRamo);
+        if (onRamoChange) {
+            onRamoChange(newRamo);
+        }
         fetchTriangle(newRamo, metric);
     };
 
@@ -40,7 +66,18 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) =>
         fetchTriangle(ramo, newMetric);
     };
 
-    if (!triangleData) return null;
+    const handleLdfChange = (index, value) => {
+        const newLdfs = [...customLdfs];
+        newLdfs[index] = parseFloat(value) || 0;
+        setCustomLdfs(newLdfs);
+        calculateIBNR(ramo, metric, newLdfs);
+    };
+
+    if (!triangleData) return (
+        <div style={{ padding: '40px', textAlign: 'center', color: '#7f8c8d' }}>
+            Cargando datos del triángulo...
+        </div>
+    );
 
     const { ramo: currentRamo, triangle_data, triangle_shape, metric: currentMetric } = triangleData;
     const years = Object.keys(triangle_data);
@@ -52,13 +89,13 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) =>
         total: 'Total (Pagado + Reserva)'
     };
 
-    // Calcular totales por fila (Suma de desarrollo por año de origen)
+    // Calcular totales por fila
     const rowTotals = {};
     years.forEach(year => {
         rowTotals[year] = Object.values(triangle_data[year]).reduce((a, b) => a + b, 0);
     });
 
-    // Calcular totales por columna (Suma de todos los años de origen para ese año de desarrollo)
+    // Calcular totales por columna
     const colTotals = {};
     devYears.forEach(devYear => {
         colTotals[devYear] = years.reduce((sum, year) => sum + triangle_data[year][devYear], 0);
@@ -66,63 +103,37 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) =>
 
     const grandTotal = Object.values(rowTotals).reduce((a, b) => a + b, 0);
 
+    // Generar LDFs sugeridos basados en los datos actuales para los inputs
+    const suggestedLdfs = [];
+    if (devYears.length > 1) {
+        for (let i = 0; i < devYears.length - 1; i++) {
+            const colCurrent = colTotals[devYears[i]];
+            const colNext = colTotals[devYears[i+1]];
+            suggestedLdfs.push(colNext / colCurrent || 1.0);
+        }
+    }
+
     return (
         <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 1000
+            backgroundColor: 'white',
+            padding: '30px',
+            borderRadius: '12px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+            width: '100%',
+            maxWidth: '1200px',
+            margin: '0 auto',
+            overflow: 'auto'
         }}>
-            <div style={{
-                backgroundColor: 'white',
-                padding: '30px',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                maxWidth: '98vw',
-                maxHeight: '90vh',
-                overflow: 'auto'
-            }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                    <h2 style={{ margin: 0, color: '#2c3e50' }}>Análisis de Triángulos Actuariales</h2>
-                    <button
-                        onClick={onClose}
-                        style={{
-                            background: '#e74c3c',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            padding: '8px 16px',
-                            cursor: 'pointer',
-                            fontWeight: 'bold'
-                        }}
-                    >
-                        Cerrar
-                    </button>
-                </div>
-
-                <div style={{
-                    display: 'flex',
-                    gap: '20px',
-                    marginBottom: '20px',
-                    padding: '15px',
-                    backgroundColor: '#f8f9fa',
-                    borderRadius: '8px',
-                    border: '1px solid #ddd',
-                    alignItems: 'center'
-                }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
+                <h2 style={{ margin: 0, color: '#2c3e50', fontSize: '24px' }}>Calculadora Actuarial - Matriz de Desarrollo</h2>
+                <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                         <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#7f8c8d' }}>Ramo</label>
                         <input
                             type="text"
                             value={ramo}
                             onChange={handleRamoChange}
-                            placeholder="Ej: Autos, Vida..."
+                            placeholder="Ej: Autos..."
                             style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc' }}
                         />
                     </div>
@@ -138,81 +149,64 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) =>
                             <option value="total">Total</option>
                         </select>
                     </div>
-                    {loading && <div style={{ color: '#3498db', fontSize: '14px', fontWeight: 'bold' }}>Cargando...</div>}
+                    {loading && <div style={{ color: '#3498db', fontSize: '14px', fontWeight: 'bold' }}>Actualizando...</div>}
                 </div>
+            </div>
 
-                <div style={{ marginBottom: '20px' }}>
-                    <p style={{ color: '#2c3e50', fontSize: '16px' }}>
-                        <strong>Visualizando:</strong> {metricLabels[currentMetric]} | <strong>Ramo:</strong> {currentRamo || 'Global'}
+            <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
+                <div style={{ flex: 1, padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', borderLeft: '4px solid #3498db' }}>
+                    <p style={{ color: '#2c3e50', fontSize: '16px', margin: 0 }}>
+                        <strong style={{ color: '#3498db' }}>Análisis Actual:</strong> {metricLabels[currentMetric]} |
+                        <strong style={{ color: '#3498db', marginLeft: '10px' }}>Ramo:</strong> {currentRamo || 'Global'}
                     </p>
-                    <p style={{ fontSize: '14px', color: '#7f8c8d' }}>
+                    <p style={{ fontSize: '14px', color: '#7f8c8d', margin: '5px 0 0 0' }}>
                         Dimensiones: {triangle_shape.rows} años de origen × {triangle_shape.columns} años de desarrollo
                     </p>
                 </div>
 
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{
-                        borderCollapse: 'collapse',
-                        width: '100%',
-                        fontSize: '13px',
-                        border: '1px solid #ddd'
-                    }}>
-                        <thead style={{ backgroundColor: '#f8f9fa' }}>
-                            <tr style={{ backgroundColor: '#f1f3f5' }}>
-                                <th style={{ border: '1px solid #ddd', padding: '8px', fontWeight: 'bold', textAlign: 'left' }}>Año Origen</th>
-                                {devYears.map(devYear => (
-                                    <th key={devYear} style={{ border: '1px solid #ddd', padding: '8px', fontWeight: 'bold' }}>
-                                        Año {devYear}
-                                    </th>
-                                ))}
-                                <th style={{ border: '1px solid #ddd', padding: '8px', fontWeight: 'bold', backgroundColor: '#e9ecef', color: '#2c3e50' }}>Total Fila</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {years.map(year => (
-                                <tr key={year}>
-                                    <td style={{ border: '1px solid #ddd', padding: '8px', fontWeight: 'bold', backgroundColor: '#fbfbfb', textAlign: 'left' }}>{year}</td>
-                                    {devYears.map(devYear => (
-                                        <td
-                                            key={`${year}-${devYear}`}
-                                            style={{
-                                                border: '1px solid #ddd',
-                                                padding: '8px',
-                                                textAlign: 'right',
-                                                backgroundColor: triangle_data[year][devYear] === 0 ? '#ffeaea' : 'white'
-                                            }}
-                                        >
-                                            {triangle_data[year][devYear].toLocaleString(undefined, {
-                                                minimumFractionDigits: 2,
-                                                maximumFractionDigits: 2
-                                            })}
-                                        </td>
-                                    ))}
-                                    <td style={{
-                                        border: '1px solid #ddd',
-                                        padding: '8px',
-                                        textAlign: 'right',
-                                        fontWeight: 'bold',
-                                        backgroundColor: '#f1f3f5',
-                                        color: '#2c3e50'
-                                    }}>
-                                        {rowTotals[year].toLocaleString(undefined, {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2
-                                        })}
-                                    </td>
-                                </tr>
+                {ibnrResults && (
+                    <div style={{ flex: 1, padding: '15px', backgroundColor: '#eefafb', borderRadius: '8px', borderLeft: '4px solid #2ecc71', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                        <p style={{ color: '#2c3e50', fontSize: '14px', margin: 0 }}>Estimación IBNR (Chain Ladder)</p>
+                        <p style={{ color: '#27ae60', fontSize: '22px', fontWeight: 'bold', margin: '5px 0 0 0' }}>
+                            ${ibnrResults.ibnr_estimate.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </p>
+                    </div>
+                )}
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+                <table style={{
+                    borderCollapse: 'collapse',
+                    width: '100%',
+                    fontSize: '13px',
+                    border: '1px solid #ddd'
+                }}>
+                    <thead style={{ backgroundColor: '#f8f9fa' }}>
+                        <tr style={{ backgroundColor: '#f1f3f5' }}>
+                            <th style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', textAlign: 'left' }}>Año Origen</th>
+                            {devYears.map(devYear => (
+                                <th key={devYear} style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', textAlign: 'center' }}>
+                                    Año {devYear}
+                                </th>
                             ))}
-                            <tr style={{ backgroundColor: '#f1f3f5', fontWeight: 'bold' }}>
-                                <td style={{ border: '1px solid #ddd', padding: '8px', textAlign: 'left', color: '#2c3e50' }}>Total Columna</td>
+                            <th style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#e9ecef', color: '#2c3e50' }}>Total Fila</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {years.map(year => (
+                            <tr key={year}>
+                                <td style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#fbfbfb', textAlign: 'left' }}>{year}</td>
                                 {devYears.map(devYear => (
-                                    <td key={`total-${devYear}`} style={{
-                                        border: '1px solid #ddd',
-                                        padding: '8px',
-                                        textAlign: 'right',
-                                        color: '#2c3e50'
-                                    }}>
-                                        {colTotals[devYear].toLocaleString(undefined, {
+                                    <td
+                                        key={`${year}-${devYear}`}
+                                        style={{
+                                            border: '1px solid #ddd',
+                                            padding: '10px',
+                                            textAlign: 'right',
+                                            backgroundColor: triangle_data[year][devYear] === 0 ? '#ffeaea' : 'white'
+                                        }}
+                                    >
+                                        {triangle_data[year][devYear].toLocaleString(undefined, {
                                             minimumFractionDigits: 2,
                                             maximumFractionDigits: 2
                                         })}
@@ -220,25 +214,71 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onClose }) =>
                                 ))}
                                 <td style={{
                                     border: '1px solid #ddd',
-                                    padding: '8px',
+                                    padding: '10px',
                                     textAlign: 'right',
-                                    backgroundColor: '#d1d8e0',
-                                    color: '#2c3e50',
-                                    fontSize: '14px'
+                                    fontWeight: 'bold',
+                                    backgroundColor: '#f1f3f5',
+                                    color: '#2c3e50'
                                 }}>
-                                    {grandTotal.toLocaleString(undefined, {
+                                    {rowTotals[year].toLocaleString(undefined, {
                                         minimumFractionDigits: 2,
                                         maximumFractionDigits: 2
                                     })}
                                 </td>
                             </tr>
-                        </tbody>
-                    </table>
-                </div>
+                        ))}
+                        <tr style={{ backgroundColor: '#f1f3f5', fontWeight: 'bold' }}>
+                            <td style={{ border: '1px solid #ddd', padding: '10px', textAlign: 'left', color: '#2c3e50' }}>Total Columna</td>
+                            {devYears.map((devYear, idx) => (
+                                <td key={`total-${devYear}`} style={{
+                                    border: '1px solid #ddd',
+                                    padding: '10px',
+                                    textAlign: 'right',
+                                    color: '#2c3e50',
+                                    backgroundColor: idx < devYears.length - 1 ? 'white' : '#f8f9fa'
+                                }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                                        <span>{colTotals[devYear].toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                        {idx < devYears.length - 1 && (
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                value={customLdfs[idx] || suggestedLdfs[idx] || ''}
+                                                onChange={(e) => handleLdfChange(idx, e.target.value)}
+                                                style={{
+                                                    width: '60px',
+                                                    fontSize: '10px',
+                                                    marginTop: '4px',
+                                                    textAlign: 'center',
+                                                    border: '1px solid #3498db',
+                                                }}
+                                                placeholder="LDF"
+                                            />
+                                        )}
+                                    </div>
+                                </td>
+                            ))}
+                            <td style={{
+                                border: '1px solid #ddd',
+                                padding: '10px',
+                                textAlign: 'right',
+                                backgroundColor: '#d1d8e0',
+                                color: '#2c3e50',
+                                fontSize: '14px'
+                            }}>
+                                {grandTotal.toLocaleString(undefined, {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                })}
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
 
-                <div style={{ marginTop: '20px', fontSize: '12px', color: '#7f8c8d' }}>
-                    <p><strong style={{ color: '#e74c3c' }}>Nota:</strong> Las celdas en rojo indican períodos sin datos (valor 0).</p>
-                </div>
+            <div style={{ marginTop: '20px', fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ color: '#e74c3c', fontWeight: 'bold' }}>●</span> Las celdas en rojo indican períodos sin datos (valor 0).
+                <span style={{ marginLeft: '20px', color: '#3498db', fontWeight: 'bold' }}>⚙️</span> Modifica los LDFs en la fila de totales para ajustar la reserva técnica.
             </div>
         </div>
     );

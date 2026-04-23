@@ -15,7 +15,7 @@ function App() {
     const [capital, setCapital] = useState(1000000);
     const [loading, setLoading] = useState(false);
     const [triangleData, setTriangleData] = useState(null);
-    const [showTriangle, setShowTriangle] = useState(false);
+    const [activeTab, setActiveTab] = useState('executive');
 
     const handleLogin = async () => {
         setLoading(true);
@@ -100,7 +100,7 @@ function App() {
                 token: auth.token
             });
             setTriangleData(data);
-            setShowTriangle(true);
+            setActiveTab('actuarial');
         } catch (error) {
             alert('Error al obtener datos del triángulo');
         } finally {
@@ -140,6 +140,52 @@ function App() {
                 <p style={{ color: '#7f8c8d' }}>Módulo Actuarial y de Proyecciones Estratégicas</p>
                 <button onClick={() => setIsLoggedIn(false)} style={{...btnStyle, backgroundColor: '#95a5a6', fontSize: '12px'}}>Cerrar Sesión</button>
             </header>
+
+            <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                gap: '10px',
+                marginBottom: '30px',
+                borderBottom: '2px solid #ddd',
+                paddingBottom: '10px'
+            }}>
+                <button
+                    onClick={() => setActiveTab('executive')}
+                    style={{
+                        ...tabStyle(activeTab === 'executive'),
+                        padding: '10px 25px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        borderRadius: '8px 8px 0 0',
+                        transition: 'all 0.3s ease',
+                        backgroundColor: activeTab === 'executive' ? '#3498db' : 'transparent',
+                        color: activeTab === 'executive' ? 'white' : '#7f8c8d',
+                        border: '1px solid #ddd',
+                        borderBottom: activeTab === 'executive' ? '2px solid #3498db' : '1px solid #ddd',
+                        boxShadow: activeTab === 'executive' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+                    }}
+                >
+                    Análisis Ejecutivo
+                </button>
+                <button
+                    onClick={() => setActiveTab('actuarial')}
+                    style={{
+                        ...tabStyle(activeTab === 'actuarial'),
+                        padding: '10px 25px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        borderRadius: '8px 8px 0 0',
+                        transition: 'all 0.3s ease',
+                        backgroundColor: activeTab === 'actuarial' ? '#3498db' : 'transparent',
+                        color: activeTab === 'actuarial' ? 'white' : '#7f8c8d',
+                        border: '1px solid #ddd',
+                        borderBottom: activeTab === 'actuarial' ? '2px solid #3498db' : '1px solid #ddd',
+                        boxShadow: activeTab === 'actuarial' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+                    }}
+                >
+                    Calculadora Actuarial
+                </button>
+            </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginBottom: '40px', justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -183,24 +229,39 @@ function App() {
                 </div>
             </div>
 
-            <ActuarialDashboard
-                data={analysisData}
-                projectionData={projectionData}
-                contractDraft={contractDraft}
-                onDownloadContract={handleDownloadContract}
-            />
-
-            {showTriangle && auth.token && (
-                <TriangleViewer
-                    initialTriangleData={triangleData}
-                    initialRamo={ramo}
-                    token={auth.token}
-                    onClose={() => setShowTriangle(false)}
-                />
-            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {activeTab === 'executive' ? (
+                    <ActuarialDashboard
+                        data={analysisData}
+                        projectionData={projectionData}
+                        contractDraft={contractDraft}
+                        onDownloadContract={handleDownloadContract}
+                    />
+                ) : (
+                    <TriangleViewer
+                        initialTriangleData={triangleData}
+                        initialRamo={ramo}
+                        token={auth.token}
+                        onRamoChange={(newRamo) => setRamo(newRamo)}
+                    />
+                )}
+            </div>
         </div>
     );
 }
+
+const tabStyle = (isActive) => ({
+    padding: '10px 25px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    borderRadius: '8px 8px 0 0',
+    transition: 'all 0.3s ease',
+    backgroundColor: isActive ? '#3498db' : 'transparent',
+    color: isActive ? 'white' : '#7f8c8d',
+    border: '1px solid #ddd',
+    borderBottom: isActive ? '2px solid #3498db' : '1px solid #ddd',
+    boxShadow: isActive ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+});
 
 const btnStyle = {
     padding: '8px 16px',

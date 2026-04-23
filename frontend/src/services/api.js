@@ -51,5 +51,12 @@ export const api = {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         return response.data;
+    },
+    calculateCustomIBNR: async ({ ramo = '', metric = 'paid', customLdfs = [], severityAdj = 1.0, token }) => {
+        const response = await axios.post(`${API_BASE_URL}/actuarial/calculate-ibnr`, null, {
+            params: { ramo, metric, custom_ldfs: customLdfs, severity_adj: severityAdj },
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        return response.data;
     }
 };

@@ -47,34 +47,42 @@ class ActuarialEngine:
 
         return triangle
 
-    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0) -> Dict[str, Any]:
+    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None) -> Dict[str, Any]:
         """
         Implements the Chain Ladder method manually using pandas and numpy.
+        Now supports custom LDFs for real-time interaction.
         """
         # Apply severity multiplier to the whole triangle
         adj_tri = triangle * severity_multiplier
 
         # 1. Calculate Age-to-Age Factors (LDF)
-        # LDF_n = Sum(Col n+1) / Sum(Col n)
         col_sums = adj_tri.sum(axis=0)
         ldfs = []
         for i in range(len(col_sums) - 1):
             factor = col_sums.iloc[i+1] / col_sums.iloc[i] if col_sums.iloc[i] != 0 else 1.0
             ldfs.append(factor)
 
+        # If custom LDFs are provided, override the calculated ones
+        if custom_ldfs is not None:
+            # Fill missing factors if custom_ldfs is shorter than needed
+            while len(custom_ldfs) < len(ldfs):
+                custom_ldfs.append(1.0)
+            # Trim if longer
+            ldfs = custom_ldfs[:len(ldfs)]
+
         # 2. Calculate Ultimate Losses for each origin year
         ultimate_losses = []
-        actual_losses_per_year = adj_tri.sum(axis=1)
 
         for idx in range(len(adj_tri)):
-            # Get the last non-zero value for this year
             year_data = adj_tri.iloc[idx]
             current_val = year_data.sum()
 
             # Find how many factors to apply based on the latest development year available for this row
-            last_dev_year = year_data[year_data > 0].index[-1] if any(year_data > 0) else 0
+            # We find the last column index where there is a value > 0
+            non_zero_cols = np.where(year_data > 0)[0]
+            last_dev_year = non_zero_cols[-1] if len(non_zero_cols) > 0 else 0
 
-            # Multiply by remaining factors
+            # Multiply by remaining factors from the current development stage to the end
             remaining_factors = ldfs[int(last_dev_year):]
             multiplier = np.prod(remaining_factors) if remaining_factors else 1.0
 

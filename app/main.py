@@ -3,6 +3,7 @@ import datetime
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
+from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal, Company, Claim, User, AuditLog, init_db
@@ -245,6 +246,33 @@ async def get_triangle_data(
             "columns": len(triangle.columns)
         }
     }
+
+@app.post("/actuarial/calculate-ibnr")
+async def calculate_custom_ibnr(
+    ramo: str = Query(None),
+    metric: str = Query("paid"),
+    custom_ldfs: List[float] = Query([]),
+    severity_adj: float = Query(1.0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df = get_df_from_db(db, current_user.company_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df)
+    target_ramo = ramo if ramo else ""
+    triangle = engine.build_triangle(ramo=target_ramo, metric=metric)
+
+    # Calcular IBNR con LDFs personalizados
+    results = engine.calculate_ibnr(
+        triangle,
+        severity_multiplier=severity_adj,
+        custom_ldfs=custom_ldfs if custom_ldfs else None
+    )
+
+    return results
+
 
 @app.get("/reports/executive")
 async def get_executive_report(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
