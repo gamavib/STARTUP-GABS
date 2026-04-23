@@ -13,10 +13,16 @@ docker-compose build --no-cache
 
   # 3. Construye desde cero y levanta
   docker compose up -d --build
-
+  1. Detén y elimina todo (contenedores, redes e imágenes locales del proyecto):     
+  docker-compose down --rmi all                                                      
+  2. Limpia la caché de construcción de Docker:                                      
+  docker builder prune -f                                                            
+  3. Levanta el proyecto desde cero, forzando la reconstrucción sin usar caché:      
+  docker-compose up -d --build --force-recreate 
 
  docker-compose down                                       
   docker-compose up -d
 
  # Construye las imágenes y levanta los contenedores en segundo plano
   docker-compose up -d --build
+docker-compose down && docker-compose up -d --build 

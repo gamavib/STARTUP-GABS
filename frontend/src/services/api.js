@@ -4,9 +4,15 @@ const API_BASE_URL = 'http://localhost:8000';
 
 export const api = {
     login: async (email, password) => {
-        const response = await axios.post(`${API_BASE_URL}/token`,
-            new URLSearchParams({ username: email, password: password })
-        );
+        const formData = new FormData();
+        formData.append('username', email);
+        formData.append('password', password);
+
+        const response = await axios.post(`${API_BASE_URL}/token`, formData, {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+        });
         return response.data;
     },
     uploadCsv: async (formData, token) => {

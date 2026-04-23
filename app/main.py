@@ -1,4 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+import datetime
+from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import io
 from sqlalchemy.orm import Session
@@ -15,6 +17,14 @@ from app.schemas import CompanySetup
 
 
 app = FastAPI(title="B2B Insurance SaaS - Actuarial Core")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 init_db()
 
@@ -81,7 +91,23 @@ async def upload_csv(
         raise HTTPException(status_code=400, detail="El archivo debe ser un CSV")
 
     contents = await file.read()
-    df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
+
+    # Robust encoding detection
+    try:
+        decoded_content = contents.decode('utf-8')
+    except UnicodeDecodeError:
+        decoded_content = contents.decode('latin-1')
+
+    df = pd.read_csv(io.StringIO(decoded_content))
+
+    # Clean column names (remove leading/trailing spaces)
+    df.columns = [col.strip() for col in df.columns]
+
+    # Ensure numeric types to avoid 'str' vs 'int' comparisons
+    for col in ['monto_pagado', 'monto_reserva']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0.0)
+
     validation = validate_insurance_csv(df)
 
     if not validation.is_valid:
@@ -93,13 +119,13 @@ async def upload_csv(
     for _, row in df.iterrows():
         claim = Claim(
             company_id=company_id,
-            external_id=row['id_siniestro'],
+            external_id=str(row['id_siniestro']),
             occurrence_date=pd.to_datetime(row['fecha_ocurrencia']).date(),
             report_date=pd.to_datetime(row['fecha_reporte']).date(),
             amount_paid=float(row['monto_pagado']),
             amount_reserve=float(row['monto_reserva']),
-            ramo=row['ramo'],
-            policy_id=row['id_poliza']
+            ramo=str(row['ramo']),
+            policy_id=str(row['id_poliza'])
         )
         db.add(claim)
 
@@ -122,11 +148,13 @@ async def get_analysis(ramo: str = Query(None), db: Session = Depends(get_db), c
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
     engine = ActuarialEngine(df)
-    triangle = engine.build_triangle(ramo=ramo)
+    # Handle None ramo by passing an empty string or a specific flag that the engine understands as 'Global'
+    target_ramo = ramo if ramo else ""
+    triangle = engine.build_triangle(ramo=target_ramo)
     ibnr_results = engine.calculate_ibnr(triangle)
-    comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=ramo)
-    metrics = engine.analyze_frequency_severity(ramo=ramo)
-    severity_dist = engine.analyze_severity_distribution(ramo=ramo)
+    comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=target_ramo)
+    metrics = engine.analyze_frequency_severity(ramo=target_ramo)
+    severity_dist = engine.analyze_severity_distribution(ramo=target_ramo)
 
     return {
         "company_id": current_user.company_id,
@@ -150,10 +178,11 @@ async def get_projections(
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
     engine = ActuarialEngine(df)
-    triangle = engine.build_triangle(ramo=ramo)
+    target_ramo = ramo if ramo else ""
+    triangle = engine.build_triangle(ramo=target_ramo)
     simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
     reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
-    contract = engine.engineer_contract(ramo=ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+    contract = engine.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
 
     return {
         "company_id": current_user.company_id,
@@ -175,13 +204,14 @@ async def get_contract_draft(
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
     engine = ActuarialEngine(df)
-    triangle = engine.build_triangle(ramo=ramo)
+    target_ramo = ramo if ramo else ""
+    triangle = engine.build_triangle(ramo=target_ramo)
     simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
     reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
-    contract_info = engine.engineer_contract(ramo=ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+    contract_info = engine.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
 
-    draft = engine.generate_contract_draft(ramo=ramo if ramo else "Global", contract_data=contract_info, ibnr=simulated_ibnr["ibnr_estimate"])
-    log_action(db, current_user, "GENERATE_CONTRACT", f"Borrador generado para ramo {ramo}")
+    draft = engine.generate_contract_draft(ramo=target_ramo if target_ramo else "Global", contract_data=contract_info, ibnr=simulated_ibnr["ibnr_estimate"])
+    log_action(db, current_user, "GENERATE_CONTRACT", f"Borrador generado para ramo {target_ramo if target_ramo else 'Global'}")
 
     return draft
 

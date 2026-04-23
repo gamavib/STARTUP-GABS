@@ -1,38 +1,87 @@
 import pandas as pd
-import chainladder as cl
 import numpy as np
 from typing import Dict, Any, List
 
 class ActuarialEngine:
     def __init__(self, df: pd.DataFrame):
-        self.df = df
+        print("SISTEMA_ACTUALIZADO_V2_NATIVO")
+        self.df = df.copy()
         self.df['fecha_ocurrencia'] = pd.to_datetime(self.df['fecha_ocurrencia'])
         self.df['fecha_reporte'] = pd.to_datetime(self.df['fecha_reporte'])
 
-    def build_triangle(self, ramo: str = None) -> cl.Triangle:
-        data = self.df if ramo is None else self.df[self.df['ramo'] == ramo]
-        triangle = cl.Triangle(data,
-                              origin='fecha_ocurrencia',
-                              development='fecha_reporte',
-                              value='monto_pagado')
+    def build_triangle(self, ramo: str = None) -> pd.DataFrame:
+        """
+        Creates a loss development triangle using pandas pivot_table.
+        Returns a DataFrame where index=origin_year and columns=dev_year.
+        """
+        if ramo is None or ramo == "":
+            data = self.df.copy()
+        else:
+            data = self.df[self.df['ramo'] == ramo].copy()
+
+        if data.empty:
+            raise ValueError(f"No hay datos disponibles para el ramo: {ramo if ramo else 'Global'}")
+
+        # Create time periods
+        data['origin_year'] = data['fecha_ocurrencia'].dt.year
+        data['dev_year'] = data['fecha_reporte'].dt.year - data['fecha_ocurrencia'].dt.year
+
+        # Pivot to create the triangle matrix
+        triangle = data.pivot_table(
+            index='origin_year',
+            columns='dev_year',
+            values='monto_pagado',
+            aggfunc='sum'
+        ).fillna(0.0)
+
         return triangle
 
-    def calculate_ibnr(self, triangle: cl.Triangle, severity_multiplier: float = 1.0) -> Dict[str, Any]:
-        adjusted_triangle = triangle * severity_multiplier
-        ld = cl.ChainladderFit(adjusted_triangle)
-        ultimate = ld.ultimate_losses
-        actual = adjusted_triangle.sum()
-        ibnr = ultimate.sum() - actual
+    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0) -> Dict[str, Any]:
+        """
+        Implements the Chain Ladder method manually using pandas and numpy.
+        """
+        # Apply severity multiplier to the whole triangle
+        adj_tri = triangle * severity_multiplier
+
+        # 1. Calculate Age-to-Age Factors (LDF)
+        # LDF_n = Sum(Col n+1) / Sum(Col n)
+        col_sums = adj_tri.sum(axis=0)
+        ldfs = []
+        for i in range(len(col_sums) - 1):
+            factor = col_sums.iloc[i+1] / col_sums.iloc[i] if col_sums.iloc[i] != 0 else 1.0
+            ldfs.append(factor)
+
+        # 2. Calculate Ultimate Losses for each origin year
+        ultimate_losses = []
+        actual_losses_per_year = adj_tri.sum(axis=1)
+
+        for idx in range(len(adj_tri)):
+            # Get the last non-zero value for this year
+            year_data = adj_tri.iloc[idx]
+            current_val = year_data.sum()
+
+            # Find how many factors to apply based on the latest development year available for this row
+            last_dev_year = year_data[year_data > 0].index[-1] if any(year_data > 0) else 0
+
+            # Multiply by remaining factors
+            remaining_factors = ldfs[int(last_dev_year):]
+            multiplier = np.prod(remaining_factors) if remaining_factors else 1.0
+
+            ultimate_losses.append(current_val * multiplier)
+
+        ultimate_sum = sum(ultimate_losses)
+        actual_sum = adj_tri.sum().sum()
+        ibnr = ultimate_sum - actual_sum
 
         return {
-            "actual_losses": float(actual),
-            "ultimate_losses": float(ultimate.sum()),
+            "actual_losses": float(actual_sum),
+            "ultimate_losses": float(ultimate_sum),
             "ibnr_estimate": float(ibnr),
-            "development_factors": ld.development_factors.to_dict()
+            "development_factors": {f"dev_{i+1}_{i+2}": ldfs[i] for i in range(len(ldfs))}
         }
 
     def compare_reserves(self, ibnr_estimate: float, ramo: str = None) -> Dict[str, Any]:
-        data = self.df if ramo is None else self.df[self.df['ramo'] == ramo]
+        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
         reserva_contable = data['monto_reserva'].sum()
         diff = ibnr_estimate - reserva_contable
         ratio = (ibnr_estimate / reserva_contable) if reserva_contable != 0 else 0
@@ -46,7 +95,7 @@ class ActuarialEngine:
         }
 
     def analyze_frequency_severity(self, ramo: str = None) -> Dict[str, Any]:
-        data = self.df if ramo is None else self.df[self.df['ramo'] == ramo]
+        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
         num_siniestros = len(data)
         num_polizas = data['id_poliza'].nunique()
         total_pagado = data['monto_pagado'].sum()
@@ -61,21 +110,16 @@ class ActuarialEngine:
         }
 
     def analyze_severity_distribution(self, ramo: str = None) -> Dict[str, Any]:
-        """
-        Análisis avanzado de severidad para detección de Outliers (Siniestros Catastróficos).
-        """
-        data = self.df if ramo is None else self.df[self.df['ramo'] == ramo]
+        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
         severities = data['monto_pagado']
 
         if severities.empty:
             return {"error": "No hay datos suficientes"}
 
-        # Cálculo de Outliers usando el método de Interquartile Range (IQR)
         q1 = severities.quantile(0.25)
         q3 = severities.quantile(0.75)
         iqr = q3 - q1
         upper_bound = q3 + 1.5 * iqr
-
         outliers = severities[severities > upper_bound]
 
         return {
@@ -100,7 +144,7 @@ class ActuarialEngine:
         }
 
     def engineer_contract(self, ramo: str = None, ibnr_estimate: float = 0, retention: float = 0) -> Dict[str, Any]:
-        data = self.df if ramo is None else self.df[self.df['ramo'] == ramo]
+        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
         severities = data['monto_pagado']
         std_dev = severities.std()
         mean_sev = severities.mean()
