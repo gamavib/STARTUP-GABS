@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from './services/api';
 import ActuarialDashboard from './components/ActuarialDashboard';
+import TriangleViewer from './components/TriangleViewer';
 
 function App() {
     const [auth, setAuth] = useState({ email: '', password: '', token: null });
@@ -13,6 +14,8 @@ function App() {
     const [severityAdj, setSeverityAdj] = useState(1.0);
     const [capital, setCapital] = useState(1000000);
     const [loading, setLoading] = useState(false);
+    const [triangleData, setTriangleData] = useState(null);
+    const [showTriangle, setShowTriangle] = useState(false);
 
     const handleLogin = async () => {
         setLoading(true);
@@ -88,6 +91,23 @@ function App() {
         }
     };
 
+    const handleViewTriangle = async () => {
+        setLoading(true);
+        try {
+            const data = await api.getTriangleData({
+                ramo: ramo,
+                metric: 'paid',
+                token: auth.token
+            });
+            setTriangleData(data);
+            setShowTriangle(true);
+        } catch (error) {
+            alert('Error al obtener datos del triángulo');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     if (!isLoggedIn) {
         return (
             <div style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f7fa' }}>
@@ -157,6 +177,10 @@ function App() {
                     </div>
                     <button onClick={fetchProjections} disabled={loading} style={btnStyle}>Simular Escenario</button>
                 </div>
+
+                <div style={{ borderLeft: '1px solid #ddd', paddingLeft: '20px' }}>
+                    <button onClick={handleViewTriangle} disabled={loading} style={btnStyle}>Ver Triángulo</button>
+                </div>
             </div>
 
             <ActuarialDashboard
@@ -165,6 +189,15 @@ function App() {
                 contractDraft={contractDraft}
                 onDownloadContract={handleDownloadContract}
             />
+
+            {showTriangle && auth.token && (
+                <TriangleViewer
+                    initialTriangleData={triangleData}
+                    initialRamo={ramo}
+                    token={auth.token}
+                    onClose={() => setShowTriangle(false)}
+                />
+            )}
         </div>
     );
 }

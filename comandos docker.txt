@@ -1,28 +1,35 @@
 CERRAR
 docker compose down
-CERRAR Y ELIMINAR TODO
-docker compose down -v
-CONSTRUIR IMAGEN SIN CACHE
-docker-compose build --no-cache
 
-  # 1. Detiene y elimina contenedores, redes y volúmenes asociados al proyecto
-  docker compose down -v
 
-  # 2. Elimina todas las imágenes huérfanas y caché de construcción del sistema
-  docker builder prune -a -f
+docker-compose down && docker-compose up -d --build
 
-  # 3. Construye desde cero y levanta
-  docker compose up -d --build
+docker logs -f insurance_saas_backend
+docker logs insurance_saas_backend
+docker logs --tail 10 -f insurance_saas_backend
+docker rm -f insurance_saas_backend
+docker restart insurance_saas_backend
+
+
   1. Detén y elimina todo (contenedores, redes e imágenes locales del proyecto):     
   docker-compose down --rmi all                                                      
   2. Limpia la caché de construcción de Docker:                                      
-  docker builder prune -f                                                            
+  docker builder prune -a -f                                                           
   3. Levanta el proyecto desde cero, forzando la reconstrucción sin usar caché:      
-  docker-compose up -d --build --force-recreate 
+  docker-compose up -d --build --force-recreate
+  Construye las imágenes y levanta los contenedores en segundo plano
+  docker compose up -d --build 
+  CONSTRUIR IMAGEN SIN CACHE
+  docker-compose build --no-cache
 
- docker-compose down                                       
-  docker-compose up -d
 
- # Construye las imágenes y levanta los contenedores en segundo plano
-  docker-compose up -d --build
-docker-compose down && docker-compose up -d --build 
+  {
+    "name": "Mi Aseguradora",
+    "tax_id": "123456789",
+    "admin_email": "admin@aseguradora.com",
+    "password": "password123"
+  }
+
+admin@aseguradora.com
+password123
+

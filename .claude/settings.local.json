@@ -9,7 +9,11 @@
       "Bash(git push *)",
       "Bash(psql -h db -U postgres -d insurance_saas)",
       "Bash(docker exec *)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(docker compose down:*)",
+      "Bash(docker builder prune:*)",
+      "Bash(docker compose up:*)",
+      "Bash(docker compose ps:*)"
     ]
   }
 }

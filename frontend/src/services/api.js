@@ -44,5 +44,12 @@ export const api = {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         return response.data;
+    },
+    getTriangleData: async ({ ramo = '', metric = 'paid', token }) => {
+        const response = await axios.get(`${API_BASE_URL}/actuarial/triangle`, {
+            params: { ramo, metric },
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        return response.data;
     }
 };

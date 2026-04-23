@@ -4,15 +4,15 @@ from typing import Dict, Any, List
 
 class ActuarialEngine:
     def __init__(self, df: pd.DataFrame):
-        print("SISTEMA_ACTUALIZADO_V2_NATIVO")
         self.df = df.copy()
         self.df['fecha_ocurrencia'] = pd.to_datetime(self.df['fecha_ocurrencia'])
         self.df['fecha_reporte'] = pd.to_datetime(self.df['fecha_reporte'])
 
-    def build_triangle(self, ramo: str = None) -> pd.DataFrame:
+    def build_triangle(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
         """
         Creates a loss development triangle using pandas pivot_table.
         Returns a DataFrame where index=origin_year and columns=dev_year.
+        - metric: 'paid' (monto_pagado), 'reserve' (monto_reserva), 'total' (paid + reserve)
         """
         if ramo is None or ramo == "":
             data = self.df.copy()
@@ -26,11 +26,22 @@ class ActuarialEngine:
         data['origin_year'] = data['fecha_ocurrencia'].dt.year
         data['dev_year'] = data['fecha_reporte'].dt.year - data['fecha_ocurrencia'].dt.year
 
+        # Handle metric selection
+        if metric == 'paid':
+            value_col = 'monto_pagado'
+        elif metric == 'reserve':
+            value_col = 'monto_reserva'
+        elif metric == 'total':
+            data['total_amount'] = data['monto_pagado'] + data['monto_reserva']
+            value_col = 'total_amount'
+        else:
+            value_col = 'monto_pagado'
+
         # Pivot to create the triangle matrix
         triangle = data.pivot_table(
             index='origin_year',
             columns='dev_year',
-            values='monto_pagado',
+            values=value_col,
             aggfunc='sum'
         ).fillna(0.0)
 

@@ -215,6 +215,37 @@ async def get_contract_draft(
 
     return draft
 
+@app.get("/actuarial/triangle")
+async def get_triangle_data(
+    ramo: str = Query(None),
+    metric: str = Query("paid"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df = get_df_from_db(db, current_user.company_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df)
+    target_ramo = ramo if ramo else ""
+    triangle = engine.build_triangle(ramo=target_ramo, metric=metric)
+
+    # Convertir el triángulo a un formato serializable para JSON
+    triangle_dict = {}
+    for row_name, row_data in triangle.iterrows():
+        triangle_dict[row_name] = row_data.to_dict()
+
+    return {
+        "company_id": current_user.company_id,
+        "ramo": target_ramo if target_ramo else "Global",
+        "metric": metric,
+        "triangle_data": triangle_dict,
+        "triangle_shape": {
+            "rows": len(triangle),
+            "columns": len(triangle.columns)
+        }
+    }
+
 @app.get("/reports/executive")
 async def get_executive_report(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     df = get_df_from_db(db, current_user.company_id)
