@@ -1,28 +1,28 @@
 # Resumen de Cambios Técnicos y Estabilización del Sistema - SaaS Actuarial
 
-Este documento detalla las modificaciones críticas realizadas para estabilizar el sistema, resolver errores de conexión, autenticación y fallos en el motor actuarial.
+Este documento detalla las modificaciones críticas realizadas para estabilizar el sistema, resolver errores de conexión, autenticación y la implementación del módulo interactivo de cálculo actuarial.
 
 ## 1. Capa de Infraestructura y Conectividad (Docker)
 - **Resolución de Socket:** Se corrigió la conexión al motor de Docker en macOS cambiando el contexto de Docker a `desktop-linux` y asegurando que el enlace simbólico `/var/run/docker.sock` apuntara correctamente al socket de Docker Desktop.
 - **Sincronización de Código:** Se implementó un flujo de limpieza total (`docker-compose down -v`, `docker rmi`, `docker builder prune`) para eliminar la caché de capas y asegurar que el código editado en el host se refleje exactamente en el contenedor.
 
 ## 2. Autenticación y Seguridad
-- **CORS (Cross-Origin Resource Sharing):** Se implementó `CORSMiddleware` en `app/main.py` permitiendo todos los orígenes (`*`). Sin esto, el navegador bloqueaba las peticiones del frontend al backend.
-- **Formato de Login:** Se corrigió la llamada al endpoint `/token`.
-    - **Problema:** El frontend enviaba datos como JSON/URLSearchParams, pero la librería `OAuth2PasswordRequestForm` de FastAPI requiere estrictamente `application/x-www-form-urlencoded`.
-    - **Solución:** Se cambió en `frontend/src/services/api.js` el uso de `URLSearchParams` por un objeto `FormData` con la cabecera de contenido explícita.
+- **CORS (Cross-Origin Resource Sharing):** Se implementó `CORSMiddleware` en `app/main.py` permitiendo todos los orígenes (`*`).
+- **Formato de Login:** Se corrigió la llamada al endpoint `/token` usando `FormData` y la cabecera `application/x-www-form-urlencoded`.
+- **Gestión de Tokens en Frontend:** Se migró la comunicación de la API en el frontend a un modelo de **Objetos de Configuración** en lugar de argumentos posicionales, eliminando errores de `undefined` en los headers de autorización y resolviendo fallos de 401 Unauthorized.
 
-## 3. Motor Actuarial y Manejo de Datos
-- **Eliminación de la librería `chainladder`:**
-    - **Causa:** La librería presentaba incompatibilidades críticas con la versión de Pandas en el contenedor, lanzando errores persistentes de `KeyError: None` y `TypeError: Chainladder() takes no arguments`.
-    - **Sustitución:** Se implementó la lógica de **Chain Ladder nativa** usando Pandas y Numpy.
-    - **Lógica implementada:**
-        - `build_triangle`: Genera la matriz de desarrollo mediante `pivot_table` (Año de Origen vs Año de Desarrollo).
-        - `calculate_ibnr`: Calcula los Factores de Desarrollo (LDF) mediante la razón de sumas de columnas y proyecta la pérdida final (Ultimate) multiplicando la última diagonal por los factores restantes.
-- **Saneamiento de CSV:**
-    - Implementación de detección de encoding (`utf-8` $\rightarrow$ `latin-1`).
-    - Limpieza de espacios en blanco en encabezados de columnas (`.strip()`).
-    - Conversión forzada de montos a numéricos eliminando caracteres no deseados para evitar errores de comparación `str` vs `int`.
+## 3. Motor Actuarial y Calculadora Interactiva
+- **Eliminación de la librería `chainladder`:** Se sustituyó por una implementación nativa en Pandas y Numpy para evitar incompatibilidades de versiones.
+- **Saneamiento de CSV:** Implementación de detección de encoding (`utf-8` $\rightarrow$ `latin-1`), limpieza de columnas y conversión robusta de tipos numéricos.
+- **Módulo de Calculadora Actuarial (SaaS v2):**
+    - **Navegación por Pestañas:** Se implementó un sistema de vistas (`activeTab`) en `App.js` para separar el "Análisis Ejecutivo" de la "Calculadora Actuarial".
+    - **Visualización de Triángulos Expandida:** El visor de triángulos pasó de ser un modal a una vista de página completa optimizada.
+    - **Métricas Dinámicas:** El sistema ahora permite alternar entre métricas de **Pagados**, **Reservas** y **Total (Pagados + Reservas)** en tiempo real.
+    - **Sincronización de Contexto:** El estado del `ramo` seleccionado se sincroniza globalmente entre todas las pestañas.
+    - **Interacción LDF (Chain Ladder Interactivo):**
+        - Implementación de un nuevo endpoint `POST /actuarial/calculate-ibnr`.
+        - Capacidad de editar los **Factores de Desarrollo (LDF)** directamente en la tabla de totales.
+        - Recálculo instantáneo de la estimación de **IBNR y Reserva Técnica** basado en los ajustes manuales del actuario.
 
 ---
 
@@ -30,17 +30,14 @@ Este documento detalla las modificaciones críticas realizadas para estabilizar 
 
 Si necesitas aplicar estos cambios sobre una versión inicial del código, utiliza el siguiente prompt:
 
-> "Actúa como un experto en FastAPI, React y Actuaría. Necesito actualizar el proyecto con las siguientes correcciones críticas de estabilidad:
+> "Actúa como un experto en FastAPI, React y Actuaría. Necesito actualizar el proyecto con las siguientes correcciones y funcionalidades:
 > 
-> 1. **CORS:** En `app/main.py`, añade `CORSMiddleware` permitiendo todos los orígenes, métodos y cabeceras inmediatamente después de instanciar `FastAPI()`.
-> 2. **Auth Frontend:** En `frontend/src/services/api.js`, modifica la función `login` para que envíe los datos usando un objeto `FormData` y la cabecera `'Content-Type': 'application/x-www-form-urlencoded'`.
-> 3. **Motor Actuarial Nativo:** En `app/modules/actuarial/engine.py`, elimina totalmente la dependencia de la librería `chainladder`. Implementa el cálculo de IBNR manualmente:
->    - Crea el triángulo usando `df.pivot_table` con `origin_year` y `dev_year`.
->    - Calcula los LDFs como el ratio de la suma de la columna n+1 sobre la columna n.
->    - Calcula el IBNR como la diferencia entre la suma de las pérdidas proyectadas (Ultimate) y las pérdidas actuales.
-> 4. **Carga de CSV Robusta:** En `app/main.py`, el endpoint `/upload-csv` debe:
->    - Intentar decodificar el archivo en `utf-8` y fallback a `latin-1`.
->    - Hacer `.strip()` a los nombres de las columnas.
->    - Convertir `monto_pagado` y `monto_reserva` a float usando `pd.to_numeric` con `errors='coerce'`.
+> 1. **CORS & Auth:** En `app/main.py`, añade `CORSMiddleware` (*). En `frontend/src/services/api.js`, modifica las funciones de API para que reciban un objeto de configuración `{ ramo, metric, token }` y envíen el token estrictamente en la cabecera `Authorization: Bearer`.
+> 2. **Motor Actuarial Nativo:** Elimina la librería `chainladder` en `app/modules/actuarial/engine.py`. Implementa el cálculo de IBNR manualmente usando `pivot_table` y permitiendo la entrada de `custom_ldfs` (factores personalizados) para el cálculo del Ultimate.
+> 3. **Carga de CSV Robusta:** En `app/main.py`, el endpoint `/upload-csv` debe soportar fallback de encoding (`utf-8` $\rightarrow$ `latin-1`), hacer `.strip()` a columnas y usar `pd.to_numeric` para los montos.
+> 4. **Sistema de Pestañas y Calculadora:**
+>    - En `App.js`, implementa un estado `activeTab` para alternar entre 'executive' y 'actuarial'.
+>    - Convierte `TriangleViewer.js` en una vista de página completa (no modal) que permita cambiar la métrica (paid, reserve, total).
+>    - Integra inputs numéricos en la fila de totales del triángulo para editar los LDFs y conectar esto al endpoint `POST /actuarial/calculate-ibnr` para mostrar el IBNR ajustado en tiempo real.
 > 
 > Asegúrate de que el código sea compatible con Python 3.12 y Pandas 2.0+."
