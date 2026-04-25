@@ -30,16 +30,17 @@ class User(Base):
 class Claim(Base):
     __tablename__ = "claims"
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"))
+    company_id = Column(Integer, ForeignKey("companies.id"), index=True)
     external_id = Column(String) # id_siniestro del CSV
-    occurrence_date = Column(Date)
-    report_date = Column(Date)
+    occurrence_date = Column(Date, index=True)
+    report_date = Column(Date, index=True)
     amount_paid = Column(Float)
     amount_reserve = Column(Float)
-    ramo = Column(String)
+    ramo = Column(String, index=True)
     policy_id = Column(String)
 
     company = relationship("Company", back_populates="claims")
+
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"

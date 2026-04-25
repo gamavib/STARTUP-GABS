@@ -99,10 +99,18 @@ async def upload_csv(
     except UnicodeDecodeError:
         decoded_content = contents.decode('latin-1')
 
-    df = pd.read_csv(io.StringIO(decoded_content))
+    # Detect separator (comma or semicolon)
+    # Read first line to check for separators
+    first_line = decoded_content.splitlines()[0] if decoded_content else ""
+    separator = ';' if ';' in first_line and (',' not in first_line or first_line.count(';') > first_line.count(',')) else ','
+
+    print(f"DEBUG CSV: Detected separator: '{separator}'")
+
+    df = pd.read_csv(io.StringIO(decoded_content), sep=separator)
 
     # Clean column names (remove leading/trailing spaces)
     df.columns = [col.strip() for col in df.columns]
+    print(f"DEBUG CSV: Columns found: {df.columns.tolist()}")
 
     # Ensure numeric types to avoid 'str' vs 'int' comparisons
     for col in ['monto_pagado', 'monto_reserva']:
@@ -112,27 +120,36 @@ async def upload_csv(
     validation = validate_insurance_csv(df)
 
     if not validation.is_valid:
+        print(f"DEBUG CSV: Validation failed: {validation.errors}")
         return {"status": "error", "errors": validation.errors}
 
     company_id = current_user.company_id
+
+    # Clear previous data for this company
     db.query(Claim).filter(Claim.company_id == company_id).delete()
 
+    inserted_count = 0
     for _, row in df.iterrows():
-        claim = Claim(
-            company_id=company_id,
-            external_id=str(row['id_siniestro']),
-            occurrence_date=pd.to_datetime(row['fecha_ocurrencia']).date(),
-            report_date=pd.to_datetime(row['fecha_reporte']).date(),
-            amount_paid=float(row['monto_pagado']),
-            amount_reserve=float(row['monto_reserva']),
-            ramo=str(row['ramo']),
-            policy_id=str(row['id_poliza'])
-        )
-        db.add(claim)
+        try:
+            claim = Claim(
+                company_id=company_id,
+                external_id=str(row['id_siniestro']),
+                occurrence_date=pd.to_datetime(row['fecha_ocurrencia']).date(),
+                report_date=pd.to_datetime(row['fecha_reporte']).date(),
+                amount_paid=float(row['monto_pagado']),
+                amount_reserve=float(row['monto_reserva']),
+                ramo=str(row['ramo']),
+                policy_id=str(row['id_poliza'])
+            )
+            db.add(claim)
+            inserted_count += 1
+        except Exception as e:
+            print(f"DEBUG CSV: Error inserting row {row.get('id_siniestro', 'unknown')}: {str(e)}")
 
     db.commit()
-    log_action(db, current_user, "UPLOAD_CSV", f"Carga de {len(df)} siniestros")
-    return {"status": "success", "message": f"Datos cargados para la compañía {company_id}"}
+    print(f"DEBUG CSV: Successfully inserted {inserted_count} out of {len(df)} rows for company {company_id}")
+    log_action(db, current_user, "UPLOAD_CSV", f"Carga de {inserted_count} siniestros")
+    return {"status": "success", "message": f"Datos cargados: {inserted_count} siniestros insertados para la compañía {company_id}"}
 
 def get_df_from_db(db: Session, company_id: int):
     claims = db.query(Claim).filter(Claim.company_id == company_id).all()
@@ -144,18 +161,24 @@ def get_df_from_db(db: Session, company_id: int):
 
 @app.get("/actuarial/analysis")
 async def get_analysis(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    df = get_df_from_db(db, current_user.company_id)
-    if df is None:
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df)
-    # Handle None ramo by passing an empty string or a specific flag that the engine understands as 'Global'
+    engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
     ibnr_results = engine.calculate_ibnr(triangle)
     comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=target_ramo)
-    metrics = engine.analyze_frequency_severity(ramo=target_ramo)
-    severity_dist = engine.analyze_severity_distribution(ramo=target_ramo)
+
+    # Analysis of frequency/severity requires raw data, not summarized triangle data
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is not None:
+        raw_engine = ActuarialEngine(df_raw) # temporary engine for raw analysis
+        metrics = raw_engine.analyze_frequency_severity(ramo=target_ramo)
+        severity_dist = raw_engine.analyze_severity_distribution(ramo=target_ramo)
+    else:
+        metrics, severity_dist = {}, {}
 
     return {
         "company_id": current_user.company_id,
@@ -166,6 +189,7 @@ async def get_analysis(ramo: str = Query(None), db: Session = Depends(get_db), c
         "severity_distribution": severity_dist
     }
 
+
 @app.get("/actuarial/projections")
 async def get_projections(
     ramo: str = Query(None),
@@ -174,16 +198,23 @@ async def get_projections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df = get_df_from_db(db, current_user.company_id)
-    if df is None:
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df)
+    engine_sum = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
-    triangle = engine.build_triangle(ramo=target_ramo)
-    simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
-    reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
-    contract = engine.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+    triangle = engine_sum.build_triangle(ramo=target_ramo)
+    simulated_ibnr = engine_sum.calculate_ibnr(triangle, severity_multiplier=severity_adj)
+    reinsurance = engine_sum.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
+
+    # Design contract needs raw data for volatility analysis
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is not None:
+        engine_raw = ActuarialEngine(df_raw)
+        contract = engine_raw.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+    else:
+        contract = {"error": "No se pudieron obtener datos brutos para el diseño del contrato"}
 
     return {
         "company_id": current_user.company_id,
@@ -200,11 +231,11 @@ async def get_contract_draft(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df = get_df_from_db(db, current_user.company_id)
-    if df is None:
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df)
+    engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
     simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
@@ -216,6 +247,36 @@ async def get_contract_draft(
 
     return draft
 
+def get_summarized_claims(db: Session, company_id: int, ramo: str = None, metric: str = 'paid'):
+    """
+    Executes a high-performance aggregation in SQL to avoid loading millions of rows into RAM.
+    """
+    from sqlalchemy import func, extract
+
+    # Define the column to sum based on the selected metric
+    if metric == 'paid':
+        value_col = Claim.amount_paid
+    elif metric == 'reserve':
+        value_col = Claim.amount_reserve
+    elif metric == 'total':
+        # SUM(paid + reserve)
+        value_col = (Claim.amount_paid + Claim.amount_reserve)
+    else:
+        value_col = Claim.amount_paid
+
+    query = db.query(
+        extract('year', Claim.occurrence_date).label('origin_year'),
+        (extract('year', Claim.report_date) - extract('year', Claim.occurrence_date)).label('dev_year'),
+        func.sum(value_col).label('total')
+    ).filter(Claim.company_id == company_id)
+
+    if ramo and ramo != "":
+        query = query.filter(Claim.ramo == ramo)
+
+    query = query.group_by('origin_year', 'dev_year')
+
+    return pd.DataFrame(query.all(), columns=['origin_year', 'dev_year', 'total'])
+
 @app.get("/actuarial/triangle")
 async def get_triangle_data(
     ramo: str = Query(None),
@@ -223,22 +284,20 @@ async def get_triangle_data(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df = get_df_from_db(db, current_user.company_id)
-    if df is None:
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo, metric)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df)
-    target_ramo = ramo if ramo else ""
-    triangle = engine.build_triangle(ramo=target_ramo, metric=metric)
+    engine = ActuarialEngine(df_summarized)
+    triangle = engine.build_triangle(ramo=ramo, metric=metric)
 
-    # Convertir el triángulo a un formato serializable para JSON
     triangle_dict = {}
     for row_name, row_data in triangle.iterrows():
         triangle_dict[row_name] = row_data.to_dict()
 
     return {
         "company_id": current_user.company_id,
-        "ramo": target_ramo if target_ramo else "Global",
+        "ramo": ramo if ramo else "Global",
         "metric": metric,
         "triangle_data": triangle_dict,
         "triangle_shape": {
@@ -246,6 +305,7 @@ async def get_triangle_data(
             "columns": len(triangle.columns)
         }
     }
+
 
 @app.post("/actuarial/calculate-ibnr")
 async def calculate_custom_ibnr(
@@ -276,16 +336,24 @@ async def calculate_custom_ibnr(
 
 @app.get("/reports/executive")
 async def get_executive_report(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    df = get_df_from_db(db, current_user.company_id)
-    if df is None:
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df)
-    triangle = engine.build_triangle(ramo=ramo)
+    engine = ActuarialEngine(df_summarized)
+    target_ramo = ramo if ramo else ""
+    triangle = engine.build_triangle(ramo=target_ramo)
     ibnr_res = engine.calculate_ibnr(triangle)
-    comp = engine.compare_reserves(ibnr_res["ibnr_estimate"], ramo=ramo)
-    metrics = engine.analyze_frequency_severity(ramo=ramo)
-    sev_dist = engine.analyze_severity_distribution(ramo=ramo)
+    comp = engine.compare_reserves(ibnr_res["ibnr_estimate"], ramo=target_ramo)
+
+    # Frequency and severity distribution require raw data
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is not None:
+        raw_engine = ActuarialEngine(df_raw)
+        metrics = raw_engine.analyze_frequency_severity(ramo=target_ramo)
+        sev_dist = raw_engine.analyze_severity_distribution(ramo=target_ramo)
+    else:
+        metrics, sev_dist = {}, {}
 
     return {
         "executive_summary": {
@@ -294,12 +362,12 @@ async def get_executive_report(ramo: str = Query(None), db: Session = Depends(ge
             "overall_solvency": comp["status"],
             "total_technical_reserve": ibnr_res["ibnr_estimate"],
             "reserve_gap": comp["diferencia"],
-            "risk_profile": "Alta Volatilidad" if sev_dist["outlier_percentage"] > 5 else "Riesgo Estable"
+            "risk_profile": "Alta Volatilidad" if (sev_dist.get("outlier_percentage", 0) > 5) else "Riesgo Estable"
         },
         "key_metrics": {
-            "frequency": metrics["frecuencia"],
-            "severity": metrics["severidad"],
-            "catastrophic_claims_impact": sev_dist["outlier_sum"]
+            "frequency": metrics.get("frecuencia", 0),
+            "severity": metrics.get("severidad", 0),
+            "catastrophic_claims_impact": sev_dist.get("outlier_sum", 0)
         },
-        "recommendation": "Sugerimos revisar los límites de reaseguro debido a la presencia de siniestros atípicos" if sev_dist["outlier_count"] > 0 else "Cartera estable, retención actual sostenible"
+        "recommendation": "Sugerimos revisar los límites de reaseguro debido a la presencia de siniestros atípicos" if sev_dist.get("outlier_count", 0) > 0 else "Cartera estable, retención actual sostenible"
     }

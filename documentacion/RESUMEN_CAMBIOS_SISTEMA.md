@@ -13,7 +13,11 @@ Este documento detalla las modificaciones críticas realizadas para estabilizar 
 
 ## 3. Motor Actuarial y Calculadora Interactiva
 - **Eliminación de la librería `chainladder`:** Se sustituyó por una implementación nativa en Pandas y Numpy para evitar incompatibilidades de versiones.
-- **Saneamiento de CSV:** Implementación de detección de encoding (`utf-8` $\rightarrow$ `latin-1`), limpieza de columnas y conversión robusta de tipos numéricos.
+- **Saneamiento de CSV:** Implementación de detección de encoding (`utf-8` $\rightarrow$ `latin-1`), limpieza de columnas y conversión robusta de tipos numéricos. Soporte para separadores `,` y `;`.
+- **Optimización de Big Data (5M+ filas):** 
+    - Migración de la agregación de datos desde la memoria RAM de Python hacia el motor de la base de datos PostgreSQL utilizando `SUM` y `GROUP BY` mediante SQLAlchemy.
+    - Implementación de `get_summarized_claims` para reducir la carga de datos antes de procesar los triángulos.
+    - Adición de índices en la tabla `claims` (`company_id`, `ramo`, `occurrence_date`, `report_date`) para optimizar la velocidad de respuesta.
 - **Módulo de Calculadora Actuarial (SaaS v2):**
     - **Navegación por Pestañas:** Se implementó un sistema de vistas (`activeTab`) en `App.js` para separar el "Análisis Ejecutivo" de la "Calculadora Actuarial".
     - **Visualización de Triángulos Expandida:** El visor de triángulos pasó de ser un modal a una vista de página completa optimizada.
@@ -23,6 +27,7 @@ Este documento detalla las modificaciones críticas realizadas para estabilizar 
         - Implementación de un nuevo endpoint `POST /actuarial/calculate-ibnr`.
         - Capacidad de editar los **Factores de Desarrollo (LDF)** directamente en la tabla de totales.
         - Recálculo instantáneo de la estimación de **IBNR y Reserva Técnica** basado en los ajustes manuales del actuario.
+- **Estabilización de Endpoints:** Corrección de errores `KeyError` asegurando que los análisis de volatilidad y severidad utilicen datos brutos mientras que los cálculos de triángulos utilicen datos resumidos.
 
 ---
 
@@ -33,8 +38,11 @@ Si necesitas aplicar estos cambios sobre una versión inicial del código, utili
 > "Actúa como un experto en FastAPI, React y Actuaría. Necesito actualizar el proyecto con las siguientes correcciones y funcionalidades:
 > 
 > 1. **CORS & Auth:** En `app/main.py`, añade `CORSMiddleware` (*). En `frontend/src/services/api.js`, modifica las funciones de API para que reciban un objeto de configuración `{ ramo, metric, token }` y envíen el token estrictamente en la cabecera `Authorization: Bearer`.
-> 2. **Motor Actuarial Nativo:** Elimina la librería `chainladder` en `app/modules/actuarial/engine.py`. Implementa el cálculo de IBNR manualmente usando `pivot_table` y permitiendo la entrada de `custom_ldfs` (factores personalizados) para el cálculo del Ultimate.
-> 3. **Carga de CSV Robusta:** En `app/main.py`, el endpoint `/upload-csv` debe soportar fallback de encoding (`utf-8` $\rightarrow$ `latin-1`), hacer `.strip()` a columnas y usar `pd.to_numeric` para los montos.
+> 2. **Optimización Big Data & Motor Actuarial:** 
+>    - Implementa la agregación de datos directamente en SQL (PostgreSQL) mediante `SUM` y `GROUP BY` en un helper `get_summarized_claims` para soportar millones de filas sin colapsar la RAM.
+>    - Elimina la librería `chainladder` en `app/modules/actuarial/engine.py`. Implementa la lógica de Chain Ladder nativa en Pandas/Numpy, permitiendo el uso de `custom_ldfs` para el cálculo del Ultimate y el IBNR.
+>    - Asegura que los métodos de análisis de severidad y volatilidad utilicen el DataFrame bruto, mientras que la construcción de triángulos use el resumido.
+> 3. **Carga de CSV Robusta:** En `app/main.py`, el endpoint `/upload-csv` debe soportar fallback de encoding (`utf-8` $\rightarrow$ `latin-1`), detección automática de separadores (`,` o `;`), hacer `.strip()` a columnas y usar `pd.to_numeric` para los montos.
 > 4. **Sistema de Pestañas y Calculadora:**
 >    - En `App.js`, implementa un estado `activeTab` para alternar entre 'executive' y 'actuarial'.
 >    - Convierte `TriangleViewer.js` en una vista de página completa (no modal) que permita cambiar la métrica (paid, reserve, total).

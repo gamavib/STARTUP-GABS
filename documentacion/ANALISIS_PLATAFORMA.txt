@@ -12,17 +12,26 @@ La plataforma implementa una arquitectura de capas desacopladas, desplegada medi
 
 ## 2. Análisis Detallado del Backend (API & Motor)
 
-### 2.1. Motor Actuarial (ActuarialEngine)
+### 2.1. Optimización de Manejo de Datos Masivos (Big Data Strategy)
+Para soportar la carga de millones de registros (5M+ filas) sin comprometer la estabilidad del servidor (evitando errores de `OutOfMemory`), el sistema implementa una estrategia de **Agregación en Fuente**:
+- **Cálculo en Base de Datos:** Se sustituyó la carga de datos brutos en RAM por la función `get_summarized_claims`. Esta función ejecuta la agregación (`SUM` y `GROUP BY`) directamente en el motor de PostgreSQL, devolviendo únicamente el resultado resumido (años de origen, desarrollo y total).
+- **Reducción de Payload:** La cantidad de datos transferidos entre la DB y Python se reduce de millones de filas a unas pocas decenas de filas por ramo, acelerando la construcción de los triángulos actuariales.
+- **Indexación Estratégica:** Se implementaron índices en las columnas críticas de la tabla `claims` (`company_id`, `ramo`, `occurrence_date`, `report_date`) para minimizar el tiempo de escaneo de la base de datos durante las agregaciones.
+
+### 2.2. Motor Actuarial (ActuarialEngine)
 El núcleo del sistema ha evolucionado de una dependencia externa a una implementación nativa y flexible:
-- **Construcción de Triángulos:** Utiliza `pivot_table` de Pandas para transformar datos planos de siniestros en matrices de desarrollo (Año de Origen vs. Año de Desarrollo).
+- **Construcción de Triángulos:** Utiliza la técnica de pivotaje sobre datos ya agregados por SQL, transformando la información en matrices de desarrollo.
 - **Métricas Dinámicas:** Soporte para generación de triángulos basados en diferentes dimensiones: `Pagados`, `Reservas` o `Total (Pagados + Reservas)`.
+- **Hibridación de Datos:** El motor es ahora capaz de operar en dos modos:
+    1. **Modo Resumido:** Para cálculos rápidos de IBNR y construcción de triángulos.
+    2. **Modo Detallado:** Para análisis de severidad, frecuencia y volatilidad, donde se requiere acceso a cada siniestro individual.
 - **Método Chain Ladder Interactivo:**
     - Implementación manual de la proyección de pérdidas.
     - **Soporte de LDFs Personalizados:** Capacidad de recibir Factores de Desarrollo (LDF) ajustados por el usuario para recalcular la reserva técnica (IBNR) en tiempo real.
     - **Cálculo de Ultimate:** Proyecta las pérdidas finales multiplicando la última diagonal del triángulo por los factores de desarrollo restantes.
 
-### 2.2. Endpoints y Flujo de Datos
-- **Gestión de Datos:** Endpoints para carga masiva de CSV con pre-procesamiento robusto (detección de encoding, limpieza de strings y tipado forzado).
+### 2.3. Endpoints y Flujo de Datos
+- **Gestión de Datos:** Endpoints para carga masiva de CSV con pre-procesamiento robusto (detección de encoding, limpieza de strings, soporte de separadores `,` y `;`, y tipado forzado).
 - **Análisis Estratégico:** Endpoints para cálculo de severidad, frecuencia, distribución de outliers y optimización de contratos de reaseguro (XoL y Quota Share).
 - **Sincronización Reactiva:** Implementación de endpoints POST específicos para el recálculo rápido de IBNR sin necesidad de regenerar la estructura completa del triángulo.
 
@@ -55,10 +64,10 @@ Es la pieza más avanzada de la UI, emulando herramientas profesionales:
 ### Fortalezas
 - **Soberanía Técnica:** Al eliminar librerías externas problemáticas, el sistema es más estable y fácil de mantener.
 - **Interactividad Profesional:** La capacidad de ajustar LDFs y ver el impacto en el IBNR eleva la herramienta de un "reporte" a una "calculadora actuarial".
+- **Eficiencia de Datos:** La capacidad de procesar volúmenes masivos de datos mediante agregación en base de datos garantiza que la plataforma sea escalable a nivel empresarial.
 - **Seguridad Robusta:** Implementación correcta de flujos de autenticación y aislamiento de datos.
 
 ### Oportunidades de Mejora
-- **Escalabilidad de Datos:** Para volúmenes masivos de siniestros, se podría migar el cálculo de triángulos desde Pandas hacia consultas agregadas directamente en PostgreSQL.
 - **Visualización Avanzada:** Incorporación de gráficos de tendencia de LDFs para comparar el comportamiento histórico vs. la proyección actual.
 
 ## 6. Conclusión

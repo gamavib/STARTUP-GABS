@@ -33,3 +33,6 @@ docker restart insurance_saas_backend
 admin@aseguradora.com
 password123
 
+
+
+  curl -v -X POST "http://localhost:8000/token" \ -H "Content-Type: application/x-www-form-urlencoded" \ -d "username=admin@miempresa.com&password=PasswordSeguro123" 

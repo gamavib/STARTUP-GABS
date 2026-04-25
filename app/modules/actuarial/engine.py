@@ -3,45 +3,28 @@ import numpy as np
 from typing import Dict, Any, List
 
 class ActuarialEngine:
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
-        self.df['fecha_ocurrencia'] = pd.to_datetime(self.df['fecha_ocurrencia'])
-        self.df['fecha_reporte'] = pd.to_datetime(self.df['fecha_reporte'])
+    def __init__(self, df_summarized: pd.DataFrame):
+        """
+        The engine now expects a summarized DataFrame (origin_year, dev_year, total)
+        instead of raw claim data.
+        """
+        self.df = df_summarized.copy()
+        # No longer need to convert dates to datetime because the DB already provides years
+
 
     def build_triangle(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
         """
-        Creates a loss development triangle using pandas pivot_table.
-        Returns a DataFrame where index=origin_year and columns=dev_year.
-        - metric: 'paid' (monto_pagado), 'reserve' (monto_reserva), 'total' (paid + reserve)
+        Transforms the summarized DataFrame into a triangle matrix.
         """
-        if ramo is None or ramo == "":
-            data = self.df.copy()
-        else:
-            data = self.df[self.df['ramo'] == ramo].copy()
-
-        if data.empty:
+        # The data is already filtered by ramo and aggregated by the DB
+        if self.df.empty:
             raise ValueError(f"No hay datos disponibles para el ramo: {ramo if ramo else 'Global'}")
 
-        # Create time periods
-        data['origin_year'] = data['fecha_ocurrencia'].dt.year
-        data['dev_year'] = data['fecha_reporte'].dt.year - data['fecha_ocurrencia'].dt.year
-
-        # Handle metric selection
-        if metric == 'paid':
-            value_col = 'monto_pagado'
-        elif metric == 'reserve':
-            value_col = 'monto_reserva'
-        elif metric == 'total':
-            data['total_amount'] = data['monto_pagado'] + data['monto_reserva']
-            value_col = 'total_amount'
-        else:
-            value_col = 'monto_pagado'
-
-        # Pivot to create the triangle matrix
-        triangle = data.pivot_table(
+        # Pivot the pre-aggregated data
+        triangle = self.df.pivot_table(
             index='origin_year',
             columns='dev_year',
-            values=value_col,
+            values='total',
             aggfunc='sum'
         ).fillna(0.0)
 
@@ -100,7 +83,14 @@ class ActuarialEngine:
         }
 
     def compare_reserves(self, ibnr_estimate: float, ramo: str = None) -> Dict[str, Any]:
-        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
+        # Use self.df but handle the case where it might be summarized
+        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo] if 'ramo' in self.df.columns else self.df
+
+        if 'monto_reserva' not in data.columns:
+            # If data is summarized, we can't sum monto_reserva here.
+            # This method should be called with the raw DataFrame.
+            return {"error": "Se requieren datos detallados para comparar reservas"}
+
         reserva_contable = data['monto_reserva'].sum()
         diff = ibnr_estimate - reserva_contable
         ratio = (ibnr_estimate / reserva_contable) if reserva_contable != 0 else 0
@@ -163,7 +153,12 @@ class ActuarialEngine:
         }
 
     def engineer_contract(self, ramo: str = None, ibnr_estimate: float = 0, retention: float = 0) -> Dict[str, Any]:
-        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
+        # Use self.df but handle the case where it might be summarized
+        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo] if 'ramo' in self.df.columns else self.df
+
+        if 'monto_pagado' not in data.columns:
+            return {"error": "Se requieren datos detallados para diseñar el contrato"}
+
         severities = data['monto_pagado']
         std_dev = severities.std()
         mean_sev = severities.mean()
