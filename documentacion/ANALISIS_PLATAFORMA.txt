@@ -25,10 +25,13 @@ El núcleo del sistema ha evolucionado de una dependencia externa a una implemen
 - **Hibridación de Datos:** El motor es ahora capaz de operar en dos modos:
     1. **Modo Resumido:** Para cálculos rápidos de IBNR y construcción de triángulos.
     2. **Modo Detallado:** Para análisis de severidad, frecuencia y volatilidad, donde se requiere acceso a cada siniestro individual.
-- **Método Chain Ladder Interactivo:**
-    - Implementación manual de la proyección de pérdidas.
-    - **Soporte de LDFs Personalizados:** Capacidad de recibir Factores de Desarrollo (LDF) ajustados por el usuario para recalcular la reserva técnica (IBNR) en tiempo real.
-    - **Cálculo de Ultimate:** Proyecta las pérdidas finales multiplicando la última diagonal del triángulo por los factores de desarrollo restantes.
+- **Modelos de Proyección Avanzados:**
+    - **Chain Ladder Interactivo:** Implementación manual con soporte de LDFs personalizados para recalcular la reserva técnica (IBNR) en tiempo real.
+    - **Bornhuetter-Ferguson (BF):** Modelo que combina la experiencia histórica con una expectativa de pérdida *a priori* (basada en primas y Loss Ratio), reduciendo la volatilidad en años jóvenes.
+    - **Cape Cod:** Proyección basada en la relación entre primas y siniestros históricos, ideal para carteras nuevas o volátiles.
+- **Validación Estadística (Back-testing):**
+    - **Simulación de Retroceso:** Capacidad de reconstruir la "foto" de la cartera en años pasados para comparar las reservas estimadas en ese momento contra los pagos reales ocurridos posteriormente.
+    - **Análisis de Error:** Cálculo automático del Error Medio Absoluto (MAE) y Ratios de Suficiencia Histórica para auditar la precisión del modelo.
 
 ### 2.3. Endpoints y Flujo de Datos
 - **Gestión de Datos:** Endpoints para carga masiva de CSV con pre-procesamiento robusto (detección de encoding, limpieza de strings, soporte de separadores `,` y `;`, y tipado forzado).
@@ -43,17 +46,21 @@ La interfaz ha pasado de ser un dashboard de reporte a una herramienta de análi
 - **Gestión de Estado Global:** El `ramo` seleccionado actúa como el eje central de la aplicación, sincronizándose entre todas las vistas para evitar la redundancia de filtros.
 - **Comunicación Eficiente:** Migración a un modelo de "Objetos de Configuración" en las llamadas a la API, asegurando que los tokens de autenticación y parámetros de filtrado se transmitan correctamente en cada petición.
 
-### 3.2. Módulo de Calculadora Actuarial
-Es la pieza más avanzada de la UI, emulando herramientas profesionales:
+### 3.2. Módulo de Calculadora Actuarial y Validación
+Es la pieza más avanzada de la UI, emulando herramientas profesionales de auditoría actuarial:
 - **Matriz Interactiva:** Visualización expandida de los triángulos con totales acumulados por fila y columna.
-- **Control de LDFs:** Inputs numéricos integrados directamente en la tabla de totales que permiten al actuario ajustar los factores de desarrollo manualmente.
-- **Feedback Instantáneo:** Un panel de resultados vinculado al estado del motor actuarial que muestra la variación de la reserva técnica inmediatamente después de cada ajuste de factor.
+- **Control de LDFs y Métodos:** Inputs numéricos integrados y selector de modelo (Chain Ladder, BF, Cape Cod) para recalcular el IBNR en tiempo real.
+- **Panel de Validación Estadística (Back-testing):**
+    - **Visualizaciones Avanzadas:** Integración de `Recharts` para mostrar la evolución del error de reserva mediante gráficos de líneas y comparativas de barras (Estimado vs Real).
+    - **KPIs de Precisión:** Panel de control con Error Medio Absoluto (MAE) y Ratios de Suficiencia Global.
+- **Feedback Instantáneo:** Un panel de resultados vinculado al estado del motor actuarial que muestra la variación de la reserva técnica inmediatamente después de cada ajuste.
 
 ## 4. Base de Datos e Infraestructura
 
 ### 4.1. Modelo de Datos
 - **Aislamiento de Datos (Multi-tenancy):** Todas las tablas (`Claim`, `User`, `Company`) están vinculadas a un `company_id`, asegurando que una empresa nunca acceda a los datos de otra.
 - **Trazabilidad:** Implementación de un sistema de `AuditLog` para registrar cada operación crítica (cargas de CSV, generación de contratos).
+- **Gestión de Primas:** Nueva tabla `Premium` para almacenar la prima emitida por ramo y año de origen, habilitando el cálculo de Loss Ratios para modelos de proyección avanzados.
 
 ### 4.2. Despliegue y Estabilidad
 - **Seguridad:** Implementación de OAuth2 con JWT (JSON Web Tokens) y hashing de contraseñas mediante `bcrypt`.

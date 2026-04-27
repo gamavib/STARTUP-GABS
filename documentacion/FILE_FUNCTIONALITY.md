@@ -5,14 +5,15 @@ Este documento detalla la responsabilidad y funcionalidad de cada archivo creado
 ## 📂 Backend (Python / FastAPI)
 
 ### 📁 `app/`
-- **`main.py`**: El orquestador de la API. Contiene la configuración de FastAPI, los endpoints públicos y protegidos, la integración del flujo de datos desde la carga hasta el contrato, y la gestión de la sesión de base de datos.
+- **`main.py`**: El orquestador de la API. Contiene la configuración de FastAPI, los endpoints públicos y protegidos, la integración del flujo de datos desde la carga hasta el contrato, y la gestión de la sesión de base de datos. Incluye ahora los endpoints de validación estadística y back-testing.
 - **`auth.py`**: Módulo de seguridad. Gestiona la creación y validación de tokens JWT, el cifrado de contraseñas con Bcrypt y la dependencia `get_current_user` que asegura la autenticación y el aislamiento multi-tenant.
-- **`database.py`**: Capa de persistencia. Define la conexión a PostgreSQL mediante SQLAlchemy y los modelos de datos (`Company`, `User`, `Claim`, `AuditLog`).
+- **`database.py`**: Capa de persistencia. Define la conexión a PostgreSQL mediante SQLAlchemy y los modelos de datos (`Company`, `User`, `Claim`, `AuditLog` y la nueva tabla `Premium` para gestión de primas).
 - **`modules/`**:
     - **`diagnostics/validator.py`**: El "filtro" de calidad. Valida que los CSVs cargados tengan las columnas correctas, fechas válidas y que no existan montos negativos, asegurando la integridad de los datos actuariales.
     - **`actuarial/engine.py`**: El cerebro de la plataforma. Contiene la lógica de ciencia actuarial:
-        - Construcción de Triángulos.
-        - Cálculo de IBNR (Chain Ladder).
+        - Construcción de Triángulos mediante agregaciones SQL.
+        - Cálculo de IBNR con soporte multi-modelo: **Chain Ladder**, **Bornhuetter-Ferguson** y **Cape Cod**.
+        - Sistema de **Back-testing** mediante simulación de retroceso temporal.
         - Análisis de Severidad y detección de Outliers (IQR).
         - Optimización de Retenciones basada en capital.
         - Ingeniería de selección de contrato (XoL vs QS).
@@ -21,8 +22,10 @@ Este documento detalla la responsabilidad y funcionalidad de cada archivo creado
 ## 📂 Frontend (React.js)
 
 ### 📁 `frontend/src/`
-- **`App.js`**: Componente principal y orquestador de la UI. Gestiona el estado global (autenticación, archivos cargados, filtros de ramo), el formulario de login y la navegación entre la carga de datos y el dashboard.
+- **`App.js`**: Componente principal y orquestador de la UI. Gestiona el estado global (autenticación, archivos cargados, filtros de ramo), la navegación entre pestañas (Ejecutivo, Calculadora y Validación) y el flujo de datos.
 - **`components/ActuarialDashboard.js`**: El centro de visualización. Renderiza los KPIs ejecutivos, el gráfico de comparativa de reservas (Recharts) y la previsualización del borrador de contrato optimizado.
+- **`components/TriangleViewer.js`**: Módulo interactivo de la calculadora actuarial. Permite cambiar la métrica, el método de proyección y ajustar los LDFs manualmente para ver el impacto en el IBNR en tiempo real.
+- **`components/ValidationViewer.js`**: Nuevo componente de auditoría estadística. Utiliza `Recharts` para visualizar el error de reserva histórico, comparativas estimado vs real y KPIs de precisión (MAE).
 - **`services/api.js`**: Capa de comunicación. Centraliza todas las peticiones Axios al backend, gestionando el envío de tokens JWT en los encabezados de autorización.
 
 ## 📂 Infraestructura y Despliegue (DevOps)
@@ -37,4 +40,7 @@ Este documento detalla la responsabilidad y funcionalidad de cada archivo creado
 ## 📂 Documentación y Datos
 
 - **`ARCHITECTURE.md`**: Documento técnico que describe la visión general, el stack tecnológico y la lógica de diseño de la plataforma.
+- **`RESUMEN_CAMBIOS_SISTEMA.md`**: Historial detallado de todas las modificaciones técnicas y estabilizaciones realizadas.
+- **`ANALISIS_PLATAFORMA.txt`**: Análisis exhaustivo de la arquitectura y el flujo de trabajo del sistema.
+- **`ESTRATEGIA_EVOLUCION_ACTUARIAL.md`**: Hoja de ruta para la evolución del motor actuarial y la gestión de reaseguro.
 - **`ejemplo_siniestros.csv`**: Dataset de prueba diseñado para validar la detección de siniestros catastróficos y la selección de contratos XoL.

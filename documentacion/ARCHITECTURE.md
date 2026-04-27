@@ -1,13 +1,13 @@
 # Diseño de Arquitectura: Plataforma SaaS B2B de Optimización de Reaseguro
 
 ## 1. Visión General
-La plataforma es una solución de software como servicio (SaaS) diseñada para compañías de seguros. Su objetivo es transformar datos brutos de siniestralidad en estrategias de transferencia de riesgo optimizadas, utilizando ciencia actuarial avanzada y una arquitectura multi-tenant segura.
+La plataforma es una solución de software como servicio (SaaS) diseñada para compañías de seguros. Su objetivo es transformar datos brutos de siniestralidad en estrategias de transferencia la de riesgo optimizadas, utilizando ciencia actuarial avanzada y una arquitectura multi-tenant segura.
 
 ## 2. Stack Tecnológico
-- **Frontend**: React.js + Recharts (Visualización de datos y Dashboard interactivo).
+- **Frontend**: React.js + Recharts (Visualización de datos, Dashboards interactivos y gráficos de validación estadística).
 - **Backend**: FastAPI (Python 3.12) - Elegido por su alta performance y soporte nativo de tipado.
-- **Motor Actuarial**: `chainladder` + `Pandas` + `NumPy` (Estándar industrial para cálculos de IBNR).
-- **Persistencia**: PostgreSQL 15 (Soporte para datos relacionales y aislamiento de clientes).
+- **Motor Actuarial**: Implementación nativa en Pandas + NumPy (Sustituyendo dependencias externas para mayor estabilidad y control).
+- **Persistencia**: PostgreSQL 15 (Soporte para datos relacionales, aislamiento de clientes y gestión de primas).
 - **Seguridad**: JWT (JSON Web Tokens) + Passlib/Bcrypt (Cifrado de contraseñas).
 - **Infraestructura**: Docker + Docker Compose + Nginx (Proxy Inverso y SSL).
 
@@ -19,8 +19,12 @@ La plataforma es una solución de software como servicio (SaaS) diseñada para c
 - **Valor**: Asegura que el motor actuarial no procese "datos basura", evitando errores de proyección.
 
 ### B. Módulo Actuarial (El Núcleo)
-- **Triángulos de Siniestralidad**: Construcción de matrices de Origen vs. Desarrollo.
-- **Cálculo de IBNR**: Aplicación de la técnica *Chain Ladder* para estimar la reserva técnica necesaria.
+- **Triángulos de Siniestralidad**: Construcción de matrices de Origen vs. Desarrollo basadas en agregaciones SQL eficientes.
+- **Cálculo de IBNR (Modelos Avanzados)**: 
+    - **Chain Ladder**: Proyección basada en la experiencia histórica de desarrollo.
+    - **Bornhuetter-Ferguson (BF)**: Combina la experiencia histórica con una expectativa de pérdida *a priori*.
+    - **Cape Cod**: Proyección basada en el Loss Ratio histórico y primas emitidas.
+- **Validación Estadística (Back-testing)**: Simulación de retroceso temporal para comparar reservas estimadas en el pasado contra pagos reales actuales.
 - **Análisis de Severidad**: Detección de siniestros catastróficos mediante el método de Rango Intercuartílico (IQR).
 - **Métricas de Cartera**: Cálculo dinámico de Frecuencia y Severidad promedio por ramo.
 
@@ -43,7 +47,7 @@ La plataforma es una solución de software como servicio (SaaS) diseñada para c
     3. Backend $\rightarrow$ Valida JWT $\rightarrow$ Extrae `company_id` $\rightarrow$ Consulta solo datos de esa compañía.
 
 ## 5. Diagrama de Flujo de Datos
-`CSV Input` $\rightarrow$ `Gobernanza` $\rightarrow$ `DB PostgreSQL` $\rightarrow$ `Actuarial Engine` $\rightarrow$ `Simulador de Escenarios` $\rightarrow$ `Ingeniería de Contratos` $\rightarrow$ `Dashboard Ejecutivo`
+`CSV Input` $\rightarrow$ `Gobernanza` $\rightarrow$ `DB PostgreSQL` $\rightarrow$ `Actuarial Engine` $\rightarrow$ `Simulador de Escenarios` $\rightarrow$ `Ingeniería de Contratos` $\rightarrow$ `Dashboard Ejecutivo` $\rightarrow$ `Validación Estadística`
 
 ## 6. Estrategia de Despliegue
 - **Contenerización**: Docker Multi-stage build para optimizar el tamaño de la imagen de React (via Nginx).

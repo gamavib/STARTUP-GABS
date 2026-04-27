@@ -8,6 +8,8 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
     const [loading, setLoading] = useState(false);
     const [ibnrResults, setIbnrResults] = useState(null);
     const [customLdfs, setCustomLdfs] = useState([]);
+    const [method, setMethod] = useState('chain_ladder');
+    const [expectedLossRatio, setExpectedLossRatio] = useState(0.6);
 
     const fetchTriangle = async (selectedRamo, selectedMetric) => {
         if (!token) {
@@ -25,7 +27,7 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
             setTriangleData(data);
 
             // Calcular IBNR inicial basándonos en los datos del triángulo
-            await calculateIBNR(selectedRamo, selectedMetric, []);
+            await calculateIBNR(selectedRamo, selectedMetric, [], method, expectedLossRatio);
         } catch (error) {
             alert('Error al actualizar los datos del triángulo');
         } finally {
@@ -33,7 +35,7 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
         }
     };
 
-    const calculateIBNR = async (selectedRamo, selectedMetric, ldfs) => {
+    const calculateIBNR = async (selectedRamo, selectedMetric, ldfs, selectedMethod = method, lr = expectedLossRatio) => {
         setLoading(true);
         try {
             const results = await api.calculateCustomIBNR({
@@ -41,6 +43,8 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                 metric: selectedMetric,
                 customLdfs: ldfs,
                 severityAdj: 1.0,
+                method: selectedMethod,
+                expected_loss_ratio: lr,
                 token: token
             });
             setIbnrResults(results);
@@ -70,7 +74,19 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
         const newLdfs = [...customLdfs];
         newLdfs[index] = parseFloat(value) || 0;
         setCustomLdfs(newLdfs);
-        calculateIBNR(ramo, metric, newLdfs);
+        calculateIBNR(ramo, metric, newLdfs, method, expectedLossRatio);
+    };
+
+    const handleMethodChange = (e) => {
+        const newMethod = e.target.value;
+        setMethod(newMethod);
+        calculateIBNR(ramo, metric, customLdfs, newMethod, expectedLossRatio);
+    };
+
+    const handleLRChange = (e) => {
+        const newLR = parseFloat(e.target.value) || 0;
+        setExpectedLossRatio(newLR);
+        calculateIBNR(ramo, metric, customLdfs, method, newLR);
     };
 
     if (!triangleData) return (
@@ -149,6 +165,30 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                             <option value="total">Total</option>
                         </select>
                     </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#7f8c8d' }}>Método</label>
+                        <select
+                            value={method}
+                            onChange={handleMethodChange}
+                            style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc' }}
+                        >
+                            <option value="chain_ladder">Chain Ladder</option>
+                            <option value="bf">Bornhuetter-Ferguson</option>
+                            <option value="cape_cod">Cape Cod</option>
+                        </select>
+                    </div>
+                    {method === 'bf' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#7f8c8d' }}>Loss Ratio Esperado</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                value={expectedLossRatio}
+                                onChange={handleLRChange}
+                                style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc', width: '80px' }}
+                            />
+                        </div>
+                    )}
                     {loading && <div style={{ color: '#3498db', fontSize: '14px', fontWeight: 'bold' }}>Actualizando...</div>}
                 </div>
             </div>
@@ -166,7 +206,7 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
 
                 {ibnrResults && (
                     <div style={{ flex: 1, padding: '15px', backgroundColor: '#eefafb', borderRadius: '8px', borderLeft: '4px solid #2ecc71', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                        <p style={{ color: '#2c3e50', fontSize: '14px', margin: 0 }}>Estimación IBNR (Chain Ladder)</p>
+                        <p style={{ color: '#2c3e50', fontSize: '14px', margin: 0 }}>Estimación IBNR ({ibnrResults.method_used === 'chain_ladder' ? 'Chain Ladder' : ibnrResults.method_used === 'bf' ? 'Bornhuetter-Ferguson' : 'Cape Cod'})</p>
                         <p style={{ color: '#27ae60', fontSize: '22px', fontWeight: 'bold', margin: '5px 0 0 0' }}>
                             ${ibnrResults.ibnr_estimate.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </p>

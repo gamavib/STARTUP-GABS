@@ -159,16 +159,66 @@ def get_df_from_db(db: Session, company_id: int):
              'monto_reserva': c.amount_reserve, 'ramo': c.ramo, 'id_poliza': c.policy_id} for c in claims]
     return pd.DataFrame(data)
 
-@app.get("/actuarial/analysis")
-async def get_analysis(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_premiums_for_company(db: Session, company_id: int, ramo: str = None):
+    from app.database import Premium
+    query = db.query(Premium.origin_year, Premium.amount).filter(Premium.company_id == company_id)
+    if ramo and ramo != "":
+        query = query.filter(Premium.ramo == ramo)
+
+    results = query.all()
+    return {int(r[0]): float(r[1]) for r in results}
+
+@app.get("/actuarial/backtesting")
+async def get_backtesting_data(
+    ramo: str = Query(None),
+    method: str = Query("chain_ladder"),
+    expected_loss_ratio: float = Query(0.6),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
     if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
+    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+
+    engine = ActuarialEngine(df_summarized)
+    results = engine.perform_backtesting(
+        method=method,
+        expected_loss_ratio=expected_loss_ratio,
+        premiums=premiums
+    )
+
+    if not results:
+        return {"status": "insufficient_data", "message": "Datos históricos insuficientes para back-testing"}
+
+    return {"status": "success", "data": results}
+
+@app.get("/actuarial/analysis")
+
+@app.get("/actuarial/analysis")
+async def get_analysis(
+    ramo: str = Query(None),
+    method: str = Query("chain_ladder"),
+    expected_loss_ratio: float = Query(0.6),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+
     engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
-    ibnr_results = engine.calculate_ibnr(triangle)
+    ibnr_results = engine.calculate_ibnr(
+        triangle,
+        method=method,
+        expected_loss_ratio=expected_loss_ratio,
+        premiums=premiums
+    )
     comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=target_ramo)
 
     # Analysis of frequency/severity requires raw data, not summarized triangle data
@@ -186,7 +236,8 @@ async def get_analysis(ramo: str = Query(None), db: Session = Depends(get_db), c
         "ibnr": ibnr_results,
         "comparison": comparison,
         "metrics": metrics,
-        "severity_distribution": severity_dist
+        "severity_distribution": severity_dist,
+        "method_used": ibnr_results.get("method_used", method)
     }
 
 
@@ -277,6 +328,11 @@ def get_summarized_claims(db: Session, company_id: int, ramo: str = None, metric
 
     return pd.DataFrame(query.all(), columns=['origin_year', 'dev_year', 'total'])
 
+@app.get("/actuarial/ramos")
+async def get_ramos(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ramos = db.query(Claim.ramo).distinct().filter(Claim.company_id == current_user.company_id).all()
+    return {"ramos": [r[0] for r in ramos if r[0]]}
+
 @app.get("/actuarial/triangle")
 async def get_triangle_data(
     ramo: str = Query(None),
@@ -313,6 +369,8 @@ async def calculate_custom_ibnr(
     metric: str = Query("paid"),
     custom_ldfs: List[float] = Query([]),
     severity_adj: float = Query(1.0),
+    method: str = Query("chain_ladder"),
+    expected_loss_ratio: float = Query(0.6),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -320,15 +378,20 @@ async def calculate_custom_ibnr(
     if df is None:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
+    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+
     engine = ActuarialEngine(df)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo, metric=metric)
 
-    # Calcular IBNR con LDFs personalizados
+    # Calcular IBNR con LDFs personalizados y método seleccionado
     results = engine.calculate_ibnr(
         triangle,
         severity_multiplier=severity_adj,
-        custom_ldfs=custom_ldfs if custom_ldfs else None
+        custom_ldfs=custom_ldfs if custom_ldfs else None,
+        method=method,
+        expected_loss_ratio=expected_loss_ratio,
+        premiums=premiums
     )
 
     return results

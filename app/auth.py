@@ -10,7 +10,7 @@ from app.database import SessionLocal, User, Company
 # Configuración de Seguridad
 SECRET_KEY = "SUPER_SECRET_KEY_SaaS_ACTUARIAL_2026"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440 # Aumentado a 24 horas para sesiones de análisis prolongadas
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")

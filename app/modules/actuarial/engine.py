@@ -30,10 +30,10 @@ class ActuarialEngine:
 
         return triangle
 
-    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None) -> Dict[str, Any]:
+    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None, method: str = 'chain_ladder', expected_loss_ratio: float = None, premiums: Dict[int, float] = None) -> Dict[str, Any]:
         """
-        Implements the Chain Ladder method manually using pandas and numpy.
-        Now supports custom LDFs for real-time interaction.
+        Implements IBNR calculation using different methods.
+        Methods: 'chain_ladder', 'bf' (Bornhuetter-Ferguson), 'cape_cod'.
         """
         # Apply severity multiplier to the whole triangle
         adj_tri = triangle * severity_multiplier
@@ -47,29 +47,61 @@ class ActuarialEngine:
 
         # If custom LDFs are provided, override the calculated ones
         if custom_ldfs is not None:
-            # Fill missing factors if custom_ldfs is shorter than needed
             while len(custom_ldfs) < len(ldfs):
                 custom_ldfs.append(1.0)
-            # Trim if longer
             ldfs = custom_ldfs[:len(ldfs)]
 
-        # 2. Calculate Ultimate Losses for each origin year
+        # 2. Calculate Ultimate Losses based on the selected method
         ultimate_losses = []
+
+        # For BF and Cape Cod, we need priors. If premiums are missing, we fallback to CL.
+        effective_method = method
+        if method in ['bf', 'cape_cod'] and (premiums is None or len(premiums) == 0):
+            effective_method = 'chain_ladder'
 
         for idx in range(len(adj_tri)):
             year_data = adj_tri.iloc[idx]
+            origin_year = int(adj_tri.index[idx])
             current_val = year_data.sum()
 
-            # Find how many factors to apply based on the latest development year available for this row
-            # We find the last column index where there is a value > 0
+            # Find development stage
             non_zero_cols = np.where(year_data > 0)[0]
             last_dev_year = non_zero_cols[-1] if len(non_zero_cols) > 0 else 0
 
-            # Multiply by remaining factors from the current development stage to the end
+            # Development factor from current stage to ultimate
             remaining_factors = ldfs[int(last_dev_year):]
-            multiplier = np.prod(remaining_factors) if remaining_factors else 1.0
+            cumulative_ldf = np.prod(remaining_factors) if remaining_factors else 1.0
 
-            ultimate_losses.append(current_val * multiplier)
+            if effective_method == 'chain_ladder':
+                # Simple Chain Ladder: Ultimate = Current * Cumulative LDF
+                ultimate = current_val * cumulative_ldf
+
+            elif effective_method == 'bf':
+                # Bornhuetter-Ferguson: Ultimate = Actual + (Prior * (1 - Development%))
+                # Prior = Premium * Expected Loss Ratio
+                premium = premiums.get(origin_year, 0) if premiums else 0
+                lr = expected_loss_ratio if expected_loss_ratio is not None else 0.6 # Default 60% if not provided
+                prior_ultimate = premium * lr
+
+                # Development % is 1 / Cumulative LDF
+                dev_pct = 1.0 / cumulative_ldf if cumulative_ldf != 0 else 0
+                ultimate = current_val + (prior_ultimate * (1 - dev_pct))
+
+            elif effective_method == 'cape_cod':
+                # Cape Cod: Similar to BF but uses historical Loss Ratio for the prior
+                premium = premiums.get(origin_year, 0) if premiums else 0
+                # Use historical average LDF as a proxy for LR if not provided
+                hist_lr = np.mean(ldfs) if ldfs else 0.6
+                prior_ultimate = premium * hist_lr
+
+                dev_pct = 1.0 / cumulative_ldf if cumulative_ldf != 0 else 0
+                ultimate = current_val + (prior_ultimate * (1 - dev_pct))
+
+            else:
+                # Fallback
+                ultimate = current_val * cumulative_ldf
+
+            ultimate_losses.append(ultimate)
 
         ultimate_sum = sum(ultimate_losses)
         actual_sum = adj_tri.sum().sum()
@@ -79,7 +111,8 @@ class ActuarialEngine:
             "actual_losses": float(actual_sum),
             "ultimate_losses": float(ultimate_sum),
             "ibnr_estimate": float(ibnr),
-            "development_factors": {f"dev_{i+1}_{i+2}": ldfs[i] for i in range(len(ldfs))}
+            "development_factors": {f"dev_{i+1}_{i+2}": ldfs[i] for i in range(len(ldfs))},
+            "method_used": effective_method
         }
 
     def compare_reserves(self, ibnr_estimate: float, ramo: str = None) -> Dict[str, Any]:
@@ -187,7 +220,54 @@ class ActuarialEngine:
             "draft_summary": f"Contrato de {contract_type} basado en volatilidad {cv:.2f}. Retención optimizada en ${retention:,.2f}"
         }
 
+    def perform_backtesting(self, method: str = 'chain_ladder', expected_loss_ratio: float = 0.6, premiums: Dict[int, float] = None) -> List[Dict[str, Any]]:
+        """
+        Performs back-testing by simulating historical data snapshots.
+        """
+        if self.df.empty:
+            return []
+
+        origin_years = sorted(self.df['origin_year'].unique())
+        if len(origin_years) < 2:
+            return []
+
+        results = []
+
+        for i in range(len(origin_years) - 1):
+            snapshot_year = origin_years[i]
+            triangle = self.build_triangle()
+            snapshot_tri = triangle.copy()
+            for r_idx, oy in enumerate(triangle.index):
+                for c_idx, dy in enumerate(triangle.columns):
+                    if oy + dy > snapshot_year:
+                        snapshot_tri.iloc[r_idx, c_idx] = 0.0
+
+            ibnr_res = self.calculate_ibnr(
+                snapshot_tri,
+                method=method,
+                expected_loss_ratio=expected_loss_ratio,
+                premiums=premiums
+            )
+
+            est = ibnr_res["ibnr_estimate"]
+            cur_tot = self.df[self.df['origin_year'] <= snapshot_year]['total'].sum()
+            snap_tot = snapshot_tri.sum().sum()
+            act = cur_tot - snap_tot
+
+            results.append({
+                "year": int(snapshot_year),
+                "estimated": float(est),
+                "actual": float(act),
+                "error": float(act - est),
+                "ratio": float(act / est if est != 0 else 0)
+            })
+
+        return results
+
     def generate_contract_draft(self, ramo: str, contract_data: Dict[str, Any], ibnr: float) -> Dict[str, Any]:
+        if "error" in contract_data:
+            return {"error": contract_data["error"]}
+
         type_name = contract_data["suggested_type"]
         details = contract_data["details"]
 

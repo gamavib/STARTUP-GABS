@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api } from './services/api';
 import ActuarialDashboard from './components/ActuarialDashboard';
 import TriangleViewer from './components/TriangleViewer';
+import ValidationViewer from './components/ValidationViewer';
 
 function App() {
     const [auth, setAuth] = useState({ email: '', password: '', token: null });
@@ -16,6 +17,7 @@ function App() {
     const [loading, setLoading] = useState(false);
     const [triangleData, setTriangleData] = useState(null);
     const [activeTab, setActiveTab] = useState('executive');
+    const [validationData, setValidationData] = useState(null);
 
     const handleLogin = async () => {
         setLoading(true);
@@ -108,6 +110,22 @@ function App() {
         }
     };
 
+    const fetchValidation = async () => {
+        setLoading(true);
+        try {
+            const data = await api.getBacktestingData({
+                ramo,
+                method: 'chain_ladder', // Default, but could be linked to state
+                token: auth.token
+            });
+            setValidationData(data);
+        } catch (error) {
+            console.error("Error fetching validation data:", error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     if (!isLoggedIn) {
         return (
             <div style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f7fa' }}>
@@ -185,6 +203,27 @@ function App() {
                 >
                     Calculadora Actuarial
                 </button>
+                <button
+                    onClick={() => {
+                        setActiveTab('validation');
+                        fetchValidation();
+                    }}
+                    style={{
+                        ...tabStyle(activeTab === 'validation'),
+                        padding: '10px 25px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        borderRadius: '8px 8px 0 0',
+                        transition: 'all 0.3s ease',
+                        backgroundColor: activeTab === 'validation' ? '#3498db' : 'transparent',
+                        color: activeTab === 'validation' ? 'white' : '#7f8c8d',
+                        border: '1px solid #ddd',
+                        borderBottom: activeTab === 'validation' ? '2px solid #3498db' : '1px solid #ddd',
+                        boxShadow: activeTab === 'validation' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+                    }}
+                >
+                    Validación Estadística
+                </button>
             </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginBottom: '40px', justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
@@ -237,12 +276,17 @@ function App() {
                         contractDraft={contractDraft}
                         onDownloadContract={handleDownloadContract}
                     />
-                ) : (
+                ) : activeTab === 'actuarial' ? (
                     <TriangleViewer
                         initialTriangleData={triangleData}
                         initialRamo={ramo}
                         token={auth.token}
                         onRamoChange={(newRamo) => setRamo(newRamo)}
+                    />
+                ) : (
+                    <ValidationViewer
+                        data={validationData}
+                        loading={loading}
                     />
                 )}
             </div>

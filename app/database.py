@@ -51,5 +51,14 @@ class AuditLog(Base):
     details = Column(String)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
+class Premium(Base):
+    __tablename__ = "premiums"
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), index=True)
+    ramo = Column(String, index=True)
+    origin_year = Column(Integer, index=True)
+    amount = Column(Float)
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)

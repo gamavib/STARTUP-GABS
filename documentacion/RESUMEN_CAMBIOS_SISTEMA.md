@@ -18,8 +18,12 @@ Este documento detalla las modificaciones críticas realizadas para estabilizar 
     - Migración de la agregación de datos desde la memoria RAM de Python hacia el motor de la base de datos PostgreSQL utilizando `SUM` y `GROUP BY` mediante SQLAlchemy.
     - Implementación de `get_summarized_claims` para reducir la carga de datos antes de procesar los triángulos.
     - Adición de índices en la tabla `claims` (`company_id`, `ramo`, `occurrence_date`, `report_date`) para optimizar la velocidad de respuesta.
+- **Modelos de Proyección Avanzados:**
+    - **Soporte Multi-Modelo:** El motor ahora soporta **Chain Ladder**, **Bornhuetter-Ferguson (BF)** y **Cape Cod**, permitiendo al actuario elegir el modelo más adecuado según la volatilidad de la cartera.
+    - **Lógica BF y Cape Cod:** Implementación de la expectativa *a priori* basada en primas emitidas y Loss Ratios esperados.
+    - **Soporte de Primas:** Creación de la tabla `Premium` en la base de datos para almacenar la prima emitida por año y ramo.
 - **Módulo de Calculadora Actuarial (SaaS v2):**
-    - **Navegación por Pestañas:** Se implementó un sistema de vistas (`activeTab`) en `App.js` para separar el "Análisis Ejecutivo" de la "Calculadora Actuarial".
+    - **Navegación por Pestañas:** Se implementó un sistema de vistas (`activeTab`) en `App.js` para separar el "Análisis Ejecutivo" de la "Calculadora Actuarial" y el módulo de "Validación Estadística".
     - **Visualización de Triángulos Expandida:** El visor de triángulos pasó de ser un modal a una vista de página completa optimizada.
     - **Métricas Dinámicas:** El sistema ahora permite alternar entre métricas de **Pagados**, **Reservas** y **Total (Pagados + Reservas)** en tiempo real.
     - **Sincronización de Contexto:** El estado del `ramo` seleccionado se sincroniza globalmente entre todas las pestañas.
@@ -27,6 +31,10 @@ Este documento detalla las modificaciones críticas realizadas para estabilizar 
         - Implementación de un nuevo endpoint `POST /actuarial/calculate-ibnr`.
         - Capacidad de editar los **Factores de Desarrollo (LDF)** directamente en la tabla de totales.
         - Recálculo instantáneo de la estimación de **IBNR y Reserva Técnica** basado en los ajustes manuales del actuario.
+- **Validación Estadística y Back-testing:**
+    - **Simulación de Retroceso:** Implementación de la lógica de reconstrucción histórica para comparar reservas estimadas en el pasado contra pagos reales actuales.
+    - **Visualización de Auditoría:** Integración de `Recharts` en el frontend para mostrar la evolución del error de reserva y comparativas Estimado vs Real.
+    - **KPIs de Precisión:** Cálculo de Error Medio Absoluto (MAE) y Ratio de Suficiencia Global.
 - **Estabilización de Endpoints:** Corrección de errores `KeyError` asegurando que los análisis de volatilidad y severidad utilicen datos brutos mientras que los cálculos de triángulos utilicen datos resumidos.
 
 ---
@@ -41,11 +49,14 @@ Si necesitas aplicar estos cambios sobre una versión inicial del código, utili
 > 2. **Optimización Big Data & Motor Actuarial:** 
 >    - Implementa la agregación de datos directamente en SQL (PostgreSQL) mediante `SUM` y `GROUP BY` en un helper `get_summarized_claims` para soportar millones de filas sin colapsar la RAM.
 >    - Elimina la librería `chainladder` en `app/modules/actuarial/engine.py`. Implementa la lógica de Chain Ladder nativa en Pandas/Numpy, permitiendo el uso de `custom_ldfs` para el cálculo del Ultimate y el IBNR.
+>    - Añade soporte para los modelos **Bornhuetter-Ferguson** y **Cape Cod**, integrando una tabla de primas en la DB y permitiendo la selección del método vía API.
+>    - Implementa la lógica de **Back-testing** (Simulación de Retroceso) en el motor para comparar estimaciones pasadas vs reales.
 >    - Asegura que los métodos de análisis de severidad y volatilidad utilicen el DataFrame bruto, mientras que la construcción de triángulos use el resumido.
 > 3. **Carga de CSV Robusta:** En `app/main.py`, el endpoint `/upload-csv` debe soportar fallback de encoding (`utf-8` $\rightarrow$ `latin-1`), detección automática de separadores (`,` o `;`), hacer `.strip()` a columnas y usar `pd.to_numeric` para los montos.
 > 4. **Sistema de Pestañas y Calculadora:**
->    - En `App.js`, implementa un estado `activeTab` para alternar entre 'executive' y 'actuarial'.
->    - Convierte `TriangleViewer.js` en una vista de página completa (no modal) que permita cambiar la métrica (paid, reserve, total).
+>    - En `App.js`, implementa un estado `activeTab` para alternar entre 'executive', 'actuarial' y 'validation'.
+>    - Convierte `TriangleViewer.js` en una vista de página completa (no modal) que permita cambiar la métrica (paid, reserve, total) y el método de proyección (CL, BF, CC).
 >    - Integra inputs numéricos en la fila de totales del triángulo para editar los LDFs y conectar esto al endpoint `POST /actuarial/calculate-ibnr` para mostrar el IBNR ajustado en tiempo real.
+>    - Crea un componente de validación con `recharts` para visualizar el error de reserva y los KPIs de precisión.
 > 
-> Asegúrate de que el código sea compatible con Python 3.12 y Pandas 2.0+."
+> Asegúrate de que la base de datos sea compatible con PostgreSQL 15 y el código compatible con Python 3.12 y Pandas 2.0+."
