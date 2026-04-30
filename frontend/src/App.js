@@ -3,6 +3,7 @@ import { api } from './services/api';
 import ActuarialDashboard from './components/ActuarialDashboard';
 import TriangleViewer from './components/TriangleViewer';
 import ValidationViewer from './components/ValidationViewer';
+import RenewalViewer from './components/RenewalViewer';
 
 function App() {
     const [auth, setAuth] = useState({ email: '', password: '', token: null });
@@ -18,13 +19,27 @@ function App() {
     const [triangleData, setTriangleData] = useState(null);
     const [activeTab, setActiveTab] = useState('executive');
     const [validationData, setValidationData] = useState(null);
+    const [renewalData, setRenewalData] = useState(null);
+    const [ramosList, setRamosList] = useState([]);
+
+
+    const fetchRamos = async () => {
+        try {
+            const data = await api.getRamos(auth.token);
+            setRamosList(data.ramos);
+        } catch (error) {
+            console.error("Error fetching ramos:", error);
+        }
+    };
 
     const handleLogin = async () => {
         setLoading(true);
         try {
             const data = await api.login(auth.email, auth.password);
-            setAuth(prev => ({ ...prev, token: data.access_token }));
+            const token = data.access_token;
+            setAuth(prev => ({ ...prev, token: token }));
             setIsLoggedIn(true);
+            await api.getRamos(token).then(res => setRamosList(res.ramos));
         } catch (error) {
             alert('Error de autenticación');
         } finally {
@@ -42,7 +57,9 @@ function App() {
             await api.uploadCsv(formData, auth.token);
             await fetchAnalysis();
             await fetchProjections();
+            await fetchRamos();
         } catch (error) {
+
             alert('Error al cargar archivo');
         } finally {
             setLoading(false);
@@ -85,9 +102,15 @@ function App() {
                 severity_adj: severityAdj,
                 capital: capital
             }, auth.token);
+
+            if (data.error) {
+                alert(`Error actuarial: ${data.error}`);
+                return;
+            }
+
             setContractDraft(data);
         } catch (error) {
-            alert('Error al generar borrador');
+            alert('Error al generar borrador: ' + (error.response?.data?.detail || error.message));
         } finally {
             setLoading(false);
         }
@@ -121,6 +144,22 @@ function App() {
             setValidationData(data);
         } catch (error) {
             console.error("Error fetching validation data:", error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const fetchRenewal = async () => {
+        setLoading(true);
+        try {
+            const data = await api.renewContract({
+                ramo,
+                method: 'chain_ladder',
+                token: auth.token
+            });
+            setRenewalData(data);
+        } catch (error) {
+            console.error("Error fetching renewal data:", error);
         } finally {
             setLoading(false);
         }
@@ -224,6 +263,27 @@ function App() {
                 >
                     Validación Estadística
                 </button>
+                <button
+                    onClick={() => {
+                        setActiveTab('renewal');
+                        fetchRenewal();
+                    }}
+                    style={{
+                        ...tabStyle(activeTab === 'renewal'),
+                        padding: '10px 25px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        borderRadius: '8px 8px 0 0',
+                        transition: 'all 0.3s ease',
+                        backgroundColor: activeTab === 'renewal' ? '#3498db' : 'transparent',
+                        color: activeTab === 'renewal' ? 'white' : '#7f8c8d',
+                        border: '1px solid #ddd',
+                        borderBottom: activeTab === 'renewal' ? '2px solid #3498db' : '1px solid #ddd',
+                        boxShadow: activeTab === 'renewal' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+                    }}
+                >
+                    Renovación de Contrato
+                </button>
             </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginBottom: '40px', justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
@@ -235,15 +295,20 @@ function App() {
                 </div>
 
                 <div style={{ borderLeft: '1px solid #ddd', paddingLeft: '20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <input
-                        type="text"
-                        placeholder="Filtrar por ramo..."
+
+                    <select
                         value={ramo}
                         onChange={(e) => setRamo(e.target.value)}
                         style={inputStyle}
-                    />
+                    >
+                        <option value="">Todos los ramos</option>
+                        {ramosList.map(r => (
+                            <option key={r} value={r}>{r}</option>
+                        ))}
+                    </select>
                     <button onClick={() => fetchAnalysis()} style={btnStyle}>Aplicar Filtro</button>
                 </div>
+
 
                 <div style={{ borderLeft: '1px solid #ddd', paddingLeft: '20px', display: 'flex', gap: '15px', alignItems: 'center' }}>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -283,10 +348,20 @@ function App() {
                         token={auth.token}
                         onRamoChange={(newRamo) => setRamo(newRamo)}
                     />
-                ) : (
+                ) : activeTab === 'validation' ? (
                     <ValidationViewer
                         data={validationData}
                         loading={loading}
+                    />
+                ) : (
+                    <RenewalViewer
+                        data={renewalData}
+                        token={auth.token}
+                        ramo={ramo}
+                        onActivate={() => {
+                            setActiveTab('executive');
+                            fetchRenewal();
+                        }}
                     />
                 )}
             </div>

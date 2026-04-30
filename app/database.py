@@ -15,6 +15,8 @@ class Company(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
     tax_id = Column(String, unique=True, nullable=False)
+    capital_limit = Column(Float, default=1000000.0)
+    cost_of_capital = Column(Float, default=0.10)
     claims = relationship("Claim", back_populates="company")
     users = relationship("User", back_populates="company")
 
@@ -58,6 +60,19 @@ class Premium(Base):
     ramo = Column(String, index=True)
     origin_year = Column(Integer, index=True)
     amount = Column(Float)
+
+class ReinsuranceContract(Base):
+    __tablename__ = "reinsurance_contracts"
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), index=True)
+    ramo = Column(String, index=True)
+    contract_type = Column(String) # "XoL" or "QS"
+    priority = Column(Float)
+    limit = Column(Float)
+    cession_pct = Column(Float)
+    effective_date = Column(Date)
+    expiry_date = Column(Date)
+    status = Column(String, default="Active") # Active, Expired, Draft
 
 
 def init_db():

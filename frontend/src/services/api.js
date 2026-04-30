@@ -89,5 +89,19 @@ export const api = {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         return response.data;
+    },
+    renewContract: async ({ ramo, method, token }) => {
+        const response = await apiClient.post('/actuarial/renew', null, {
+            params: { ramo, method },
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        return response.data;
+    },
+    activateContract: async ({ ramo, contract_type, priority, limit, cession_pct, token }) => {
+        const response = await apiClient.post('/actuarial/contracts/activate', null, {
+            params: { ramo, contract_type, priority, limit, cession_pct },
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        return response.data;
     }
 };

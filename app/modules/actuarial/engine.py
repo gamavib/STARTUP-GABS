@@ -174,15 +174,56 @@ class ActuarialEngine:
             "upper_bound_threshold": float(upper_bound)
         }
 
-    def optimize_reinsurance(self, ibnr_estimate: float, capital_available: float) -> Dict[str, Any]:
-        suggested_retention = min(capital_available * 0.5, ibnr_estimate)
+    def optimize_reinsurance(self, ibnr_estimate: float, capital_limit: float, cost_of_capital: float = 0.10) -> Dict[str, Any]:
+        """
+        Optimizes retention based on cost of capital and solvency limits.
+        """
+        # Logic: Retention is a trade-off between cost of capital and reinsurance cost.
+        # For this model, we use a risk-adjusted retention.
+        # If cost of capital is high, we tend to cede more.
+        retention_factor = 1.0 - (cost_of_capital * 0.5) # Simplified impact of cost of capital
+        suggested_retention = min(capital_limit * 0.4 * retention_factor, ibnr_estimate)
         ceded_amount = max(0, ibnr_estimate - suggested_retention)
+
+        # Solvency Alert: If IBNR is > 30% of capital limit, trigger urgent cession
+        solvency_ratio = ibnr_estimate / capital_limit if capital_limit != 0 else 0
+        alert_status = "Sugerir Cesión Urgente" if solvency_ratio > 0.30 else "Sostenible"
 
         return {
             "suggested_retention": float(suggested_retention),
             "ceded_amount": float(ceded_amount),
             "retention_percentage": (suggested_retention / ibnr_estimate * 100) if ibnr_estimate != 0 else 0,
-            "recommendation": "Transferir excedente al reasegurador para proteger solvencia" if ceded_amount > 0 else "Retención sostenible con capital actual"
+            "solvency_ratio": float(solvency_ratio),
+            "alert_status": alert_status,
+            "recommendation": f"Estado: {alert_status}. Retención optimizada considerando costo de capital del {cost_of_capital*100}%."
+        }
+
+    def analyze_renewal_deltas(self, current_metrics: Dict[str, Any], previous_metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Compares current and previous period metrics to suggest contract adjustments.
+        """
+        if not current_metrics or not previous_metrics:
+            return {"error": "Se requieren métricas de ambos periodos para el análisis"}
+
+        f_curr = current_metrics.get('frecuencia', 0)
+        f_prev = previous_metrics.get('frecuencia', 0)
+        s_curr = current_metrics.get('severidad', 0)
+        s_prev = previous_metrics.get('severidad', 0)
+
+        delta_f = (f_curr - f_prev) / f_prev if f_prev != 0 else 0
+        delta_s = (s_curr - s_prev) / s_prev if s_prev != 0 else 0
+
+        suggestions = []
+        if delta_s > 0.10:
+            suggestions.append("Sugerir aumento de la Prioridad o Límite en XoL debido al incremento en la severidad.")
+        if delta_f > 0.10:
+            suggestions.append("Sugerir aumento del porcentaje de cesión en Quota Share debido al incremento en la frecuencia.")
+
+        return {
+            "delta_frequency": float(delta_f),
+            "delta_severity": float(delta_s),
+            "suggestions": suggestions,
+            "trend": "Volatilidad al Alza" if delta_f > 0 or delta_s > 0 else "Estable/Bajista"
         }
 
     def engineer_contract(self, ramo: str = None, ibnr_estimate: float = 0, retention: float = 0) -> Dict[str, Any]:

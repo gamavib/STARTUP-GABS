@@ -18,26 +18,34 @@ La plataforma es una solución de software como servicio (SaaS) diseñada para c
 - **Proceso**: Carga de CSV $\rightarrow$ Validación de tipos $\rightarrow$ Check de coherencia actuarial $\rightarrow$ Registro en Audit Log.
 - **Valor**: Asegura que el motor actuarial no procese "datos basura", evitando errores de proyección.
 
+## 3. Arquitectura de Módulos (Core)
+
+### A. Módulo de Diagnóstico y Gobernanza
+- **Función**: Puerta de entrada de datos.
+- **Proceso**: Carga de CSV $\rightarrow$ Validación de tipos $\rightarrow$ Check de coherencia actuarial $\rightarrow$ Registro en Audit Log.
+- **Valor**: Asegura que el motor actuarial no procese "datos basura", evitando errores de proyección.
+
 ### B. Módulo Actuarial (El Núcleo)
-- **Triángulos de Siniestralidad**: Construcción de matrices de Origen vs. Desarrollo basadas en agregaciones SQL eficientes.
+- **Triángulos de Siniestralidad**: Construcción de matrices de Origen vs. Desarrollo basadas en agregaciones SQL eficientes (SUM/GROUP BY) para soportar millones de registros.
 - **Cálculo de IBNR (Modelos Avanzados)**: 
-    - **Chain Ladder**: Proyección basada en la experiencia histórica de desarrollo.
-    - **Bornhuetter-Ferguson (BF)**: Combina la experiencia histórica con una expectativa de pérdida *a priori*.
+    - **Chain Ladder Interactivo**: Proyección basada en experiencia histórica con soporte para ajuste manual de LDFs en tiempo real.
+    - **Bornhuetter-Ferguson (BF)**: Combina experiencia histórica con expectativa *a priori* basada en primas y Loss Ratio.
     - **Cape Cod**: Proyección basada en el Loss Ratio histórico y primas emitidas.
-- **Validación Estadística (Back-testing)**: Simulación de retroceso temporal para comparar reservas estimadas en el pasado contra pagos reales actuales.
+- **Validación Estadística (Back-testing)**: Simulación de retroceso temporal para comparar reservas estimadas en el pasado contra pagos reales actuales, midiendo el MAE (Error Medio Absoluto).
 - **Análisis de Severidad**: Detección de siniestros catastróficos mediante el método de Rango Intercuartílico (IQR).
 - **Métricas de Cartera**: Cálculo dinámico de Frecuencia y Severidad promedio por ramo.
 
-### C. Módulo de Proyecciones y Optimización
-- **Simulador de Estrés**: Permite ajustar multiplicadores de severidad para analizar escenarios adversos.
-- **Optimización de Retención**: Sugiere la cantidad óptima de capital a retener basándose en la solvencia de la compañía.
-- **Sugerencia de Contrato**: Basado en el Índice de Volatilidad (CV), recomienda el tipo de contrato:
+### C. Módulo de Proyecciones y Optimización de Reaseguro
+- **Simulador de Estrés**: Ajuste de multiplicadores de severidad para analizar escenarios adversos.
+- **Optimización de Retención**: Sugerencia de capital a retener basándose en la solvencia y el costo de capital de la compañía.
+- **Sugerencia de Contrato**: Basado en el Índice de Volatilidad (CV) y deltas de frecuencia/severidad, recomienda:
     - **Quota Share (QS)**: Para riesgos estables y predecibles.
     - **Excess of Loss (XoL)**: Para riesgos volátiles con picos de severidad.
 
-### D. Módulo de Ingeniería de Contratos
-- **Generación de Borradores**: Traduce los resultados técnicos en cláusulas contractuales (Prioridad, Límite, Cuotas de Cesión).
-- **Formato**: Genera estructuras JSON listas para exportación a documentos legales.
+### D. Módulo de Gestión de Renovaciones y Contratos
+- **Ciclo de Vida del Contrato**: Gestión de estados de contrato (Active $\rightarrow$ Expired) y activación de nuevas pólizas de reaseguro.
+- **Generación de Borradores**: Traduce resultados técnicos en cláusulas contractuales (Prioridad, Límite, Cuotas de Cesión) con un sistema de fallback robusto para asegurar la generación del documento.
+- **Formato**: Genera estructuras JSON listas para exportación a documentos legales y visualización en el dashboard de renovación.
 
 ## 4. Diseño de Seguridad y SaaS (Multi-tenancy)
 - **Aislamiento de Datos**: Cada tabla en la base de datos contiene un `company_id`. Todas las consultas se filtran por este ID basándose en el token JWT del usuario.

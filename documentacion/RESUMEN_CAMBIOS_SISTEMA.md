@@ -23,10 +23,10 @@ Este documento detalla las modificaciones críticas realizadas para estabilizar 
     - **Lógica BF y Cape Cod:** Implementación de la expectativa *a priori* basada en primas emitidas y Loss Ratios esperados.
     - **Soporte de Primas:** Creación de la tabla `Premium` en la base de datos para almacenar la prima emitida por año y ramo.
 - **Módulo de Calculadora Actuarial (SaaS v2):**
-    - **Navegación por Pestañas:** Se implementó un sistema de vistas (`activeTab`) en `App.js` para separar el "Análisis Ejecutivo" de la "Calculadora Actuarial" y el módulo de "Validación Estadística".
+    - **Navegación por Pestañas:** Se implementó un sistema de vistas (`activeTab`) en `App.js` para separar el "Análisis Ejecutivo" de la "Calculadora Actuarial", el módulo de "Validación Estadística" y el de "Renovación de Contrato".
     - **Visualización de Triángulos Expandida:** El visor de triángulos pasó de ser un modal a una vista de página completa optimizada.
     - **Métricas Dinámicas:** El sistema ahora permite alternar entre métricas de **Pagados**, **Reservas** y **Total (Pagados + Reservas)** en tiempo real.
-    - **Sincronización de Contexto:** El estado del `ramo` seleccionado se sincroniza globalmente entre todas las pestañas.
+    - **Sincronización de Contexto:** El estado del `ramo` seleccionado se sincroniza globalmente entre todas las pestañas. Se implementó la recuperación dinámica de ramos desde la API para alimentar un menú desplegable (`<select>`) en el filtro, eliminando la entrada de texto manual.
     - **Interacción LDF (Chain Ladder Interactivo):**
         - Implementación de un nuevo endpoint `POST /actuarial/calculate-ibnr`.
         - Capacidad de editar los **Factores de Desarrollo (LDF)** directamente en la tabla de totales.
@@ -35,7 +35,11 @@ Este documento detalla las modificaciones críticas realizadas para estabilizar 
     - **Simulación de Retroceso:** Implementación de la lógica de reconstrucción histórica para comparar reservas estimadas en el pasado contra pagos reales actuales.
     - **Visualización de Auditoría:** Integración de `Recharts` en el frontend para mostrar la evolución del error de reserva y comparativas Estimado vs Real.
     - **KPIs de Precisión:** Cálculo de Error Medio Absoluto (MAE) y Ratio de Suficiencia Global.
-- **Estabilización de Endpoints:** Corrección de errores `KeyError` asegurando que los análisis de volatilidad y severidad utilicen datos brutos mientras que los cálculos de triángulos utilicen datos resumidos.
+- **Renovación de Contratos de Reaseguro:**
+    - **Flujo Automatizado:** Implementación de `/actuarial/renew` y `/actuarial/contracts/activate` para gestionar la transición de contratos.
+    - **Sugerencia de Contrato:** Lógica basada en la volatilidad (CV) para recomendar contratos **Excess of Loss (XoL)** o **Quota Share (QS)**.
+    - **Generación de Borradores:** Implementación de la generación de borradores técnicos con cláusulas automáticas, incluyendo un sistema de *fallback* para asegurar la generación del documento incluso con datos limitados.
+- **Estabilización de Endpoints:** Corrección de errores `KeyError` y `404 Not Found` asegurando que los análisis de volatilidad y severidad utilicen datos brutos mientras que los cálculos de triángulos utilicen datos resumidos. Se eliminaron decoradores de ruta duplicados en la API.
 
 ---
 

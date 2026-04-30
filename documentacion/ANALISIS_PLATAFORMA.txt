@@ -1,6 +1,6 @@
 # Análisis Detallado de la Plataforma Actuarial SaaS
 
-Este documento proporciona una visión técnica exhaustiva de la arquitectura, componentes y flujo de trabajo de la plataforma, integrando las últimas evoluciones en la Calculadora Actuarial Interactiva.
+Este documento proporciona una visión técnica exhaustiva de la arquitectura, componentes y flujo de trabajo de la plataforma, integrando las últimas evoluciones en la Calculadora Actuarial Interactiva y el módulo de Renovación de Contratos.
 
 ## 1. Arquitectura General del Sistema
 La plataforma implementa una arquitectura de capas desacopladas, desplegada mediante contenedores Docker para garantizar la portabilidad y consistencia entre entornos.
@@ -33,34 +33,39 @@ El núcleo del sistema ha evolucionado de una dependencia externa a una implemen
     - **Simulación de Retroceso:** Capacidad de reconstruir la "foto" de la cartera en años pasados para comparar las reservas estimadas en ese momento contra los pagos reales ocurridos posteriormente.
     - **Análisis de Error:** Cálculo automático del Error Medio Absoluto (MAE) y Ratios de Suficiencia Histórica para auditar la precisión del modelo.
 
-### 2.3. Endpoints y Flujo de Datos
+### 2.3. Gestión de Renovaciones y Reaseguro
+El sistema ha integrado un flujo completo de optimización de capital y renovación de contratos:
+- **Optimización de Retención:** Lógica basada en el costo de capital y el límite de solvencia para sugerir el monto óptimo de retención vs. cesión al reasegurador.
+- **Ingeniería de Contratos:** Análisis automático de la volatilidad (Coeficiente de Variación - CV) para recomendar la estructura del contrato:
+    - **Excess of Loss (XoL):** Recomendado para carteras con alta volatilidad y siniestros severos.
+    - **Quota Share (QS):** Recomendado para carteras más estables con distribución proporcional.
+- **Automatización de Borradores:** Generación de documentos técnicos basados en el IBNR proyectado, con un sistema de *fallback* robusto que garantiza la creación del borrador incluso ante la ausencia de datos brutos detallados.
+
+### 2.4. Endpoints y Flujo de Datos
 - **Gestión de Datos:** Endpoints para carga masiva de CSV con pre-procesamiento robusto (detección de encoding, limpieza de strings, soporte de separadores `,` y `;`, y tipado forzado).
-- **Análisis Estratégico:** Endpoints para cálculo de severidad, frecuencia, distribución de outliers y optimización de contratos de reaseguro (XoL y Quota Share).
+- **Análisis Estratégico:** Endpoints para cálculo de severidad, frecuencia, distribución de outliers y optimización de contratos de reaseguro.
 - **Sincronización Reactiva:** Implementación de endpoints POST específicos para el recálculo rápido de IBNR sin necesidad de regenerar la estructura completa del triángulo.
 
 ## 3. Análisis Detallado del Frontend (UI/UX)
 
 ### 3.1. Arquitectura de Interfaz
 La interfaz ha pasado de ser un dashboard de reporte a una herramienta de análisis interactivo:
-- **Sistema de Navegación por Pestañas:** Implementación de un estado global de navegación que alterna entre el "Análisis Ejecutivo" (KPIs y Dashboard) y la "Calculadora Actuarial".
-- **Gestión de Estado Global:** El `ramo` seleccionado actúa como el eje central de la aplicación, sincronizándose entre todas las vistas para evitar la redundancia de filtros.
+- **Sistema de Navegación por Pestañas:** Implementación de un estado global de navegación que alterna entre el "Análisis Ejecutivo", la "Calculadora Actuarial", "Validación Estadística" y "Renovación de Contrato".
+- **Gestión de Estado Global:** El `ramo` seleccionado actúa como el eje central de la aplicación, sincronizándose entre todas las vistas.
+- **Sincronización Dinámica de Ramos:** Implementación de un menú desplegable (`<select>`) alimentado en tiempo real por la API, eliminando la entrada de texto manual y reduciendo errores de filtrado.
 - **Comunicación Eficiente:** Migración a un modelo de "Objetos de Configuración" en las llamadas a la API, asegurando que los tokens de autenticación y parámetros de filtrado se transmitan correctamente en cada petición.
 
-### 3.2. Módulo de Calculadora Actuarial y Validación
-Es la pieza más avanzada de la UI, emulando herramientas profesionales de auditoría actuarial:
-- **Matriz Interactiva:** Visualización expandida de los triángulos con totales acumulados por fila y columna.
-- **Control de LDFs y Métodos:** Inputs numéricos integrados y selector de modelo (Chain Ladder, BF, Cape Cod) para recalcular el IBNR en tiempo real.
-- **Panel de Validación Estadística (Back-testing):**
-    - **Visualizaciones Avanzadas:** Integración de `Recharts` para mostrar la evolución del error de reserva mediante gráficos de líneas y comparativas de barras (Estimado vs Real).
-    - **KPIs de Precisión:** Panel de control con Error Medio Absoluto (MAE) y Ratios de Suficiencia Global.
-- **Feedback Instantáneo:** Un panel de resultados vinculado al estado del motor actuarial que muestra la variación de la reserva técnica inmediatamente después de cada ajuste.
+### 3.2. Módulos Especializados
+- **Calculadora Actuarial:** Emulación de herramientas profesionales con matrices interactivas, control de LDFs y selección de modelos de proyección (CL, BF, CC).
+- **Validación Estadística:** Uso de `Recharts` para visualizar la evolución del error de reserva y KPIs de precisión mediante gráficos de líneas y barras.
+- **Gestión de Renovaciones:** Dashboard comparativo que muestra el contrato actual frente a la sugerencia optimizada, incluyendo alertas de solvencia y justificaciones técnicas basadas en la tendencia de frecuencia y severidad.
 
 ## 4. Base de Datos e Infraestructura
 
 ### 4.1. Modelo de Datos
 - **Aislamiento de Datos (Multi-tenancy):** Todas las tablas (`Claim`, `User`, `Company`) están vinculadas a un `company_id`, asegurando que una empresa nunca acceda a los datos de otra.
 - **Trazabilidad:** Implementación de un sistema de `AuditLog` para registrar cada operación crítica (cargas de CSV, generación de contratos).
-- **Gestión de Primas:** Nueva tabla `Premium` para almacenar la prima emitida por ramo y año de origen, habilitando el cálculo de Loss Ratios para modelos de proyección avanzados.
+- **Gestión de Primas:** Tabla `Premium` para almacenar la prima emitida por ramo y año de origen, habilitando el cálculo de Loss Ratios para modelos de proyección avanzados.
 
 ### 4.2. Despliegue y Estabilidad
 - **Seguridad:** Implementación de OAuth2 con JWT (JSON Web Tokens) y hashing de contraseñas mediante `bcrypt`.
@@ -72,7 +77,7 @@ Es la pieza más avanzada de la UI, emulando herramientas profesionales de audit
 - **Soberanía Técnica:** Al eliminar librerías externas problemáticas, el sistema es más estable y fácil de mantener.
 - **Interactividad Profesional:** La capacidad de ajustar LDFs y ver el impacto en el IBNR eleva la herramienta de un "reporte" a una "calculadora actuarial".
 - **Eficiencia de Datos:** La capacidad de procesar volúmenes masivos de datos mediante agregación en base de datos garantiza que la plataforma sea escalable a nivel empresarial.
-- **Seguridad Robusta:** Implementación correcta de flujos de autenticación y aislamiento de datos.
+- **Sugerencia Automatizada:** La integración de la ingeniería de contratos basada en volatilidad aporta un valor estratégico real al negocio de reaseguro.
 
 ### Oportunidades de Mejora
 - **Visualización Avanzada:** Incorporación de gráficos de tendencia de LDFs para comparar el comportamiento histórico vs. la proyección actual.

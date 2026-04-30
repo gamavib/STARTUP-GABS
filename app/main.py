@@ -168,33 +168,121 @@ def get_premiums_for_company(db: Session, company_id: int, ramo: str = None):
     results = query.all()
     return {int(r[0]): float(r[1]) for r in results}
 
-@app.get("/actuarial/backtesting")
-async def get_backtesting_data(
+@app.post("/actuarial/renew")
+async def renew_contract(
     ramo: str = Query(None),
     method: str = Query("chain_ladder"),
     expected_loss_ratio: float = Query(0.6),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    from app.database import ReinsuranceContract
+
+    # 1. Get Current Active Contract
+    contract = db.query(ReinsuranceContract).filter(
+        ReinsuranceContract.company_id == current_user.company_id,
+        ReinsuranceContract.ramo == ramo,
+        ReinsuranceContract.status == "Active"
+    ).first()
+
+    # 2. Get Current Metrics
     df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
     if df_summarized.empty:
-        raise HTTPException(status_code=404, detail="No hay datos cargados")
-
-    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+        raise HTTPException(status_code=404, detail="No hay datos cargados para este ramo")
 
     engine = ActuarialEngine(df_summarized)
-    results = engine.perform_backtesting(
+    current_metrics = engine.analyze_frequency_severity(ramo=ramo)
+
+    # We'll simulate "Previous Metrics" by taking data from 1 year ago if available
+    # For a real implementation, we would store snapshots of metrics per year
+    previous_metrics = {
+        "frecuencia": current_metrics["frecuencia"] * 0.9, # Simulated baseline
+        "severidad": current_metrics["severidad"] * 0.9,
+        "total_siniestros": current_metrics["total_siniestros"] * 0.9,
+        "total_polizas": current_metrics["total_polizas"]
+    }
+
+    # 3. Analyze Deltas
+    deltas = engine.analyze_renewal_deltas(current_metrics, previous_metrics)
+
+    # 4. Calculate Optimized Retention for the new period
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    triangle = engine.build_triangle(ramo=ramo)
+    ibnr_res = engine.calculate_ibnr(
+        triangle,
         method=method,
         expected_loss_ratio=expected_loss_ratio,
-        premiums=premiums
+        premiums=get_premiums_for_company(db, current_user.company_id, ramo)
     )
 
-    if not results:
-        return {"status": "insufficient_data", "message": "Datos históricos insuficientes para back-testing"}
+    optimization = engine.optimize_reinsurance(
+        ibnr_estimate=ibnr_res["ibnr_estimate"],
+        capital_limit=company.capital_limit,
+        cost_of_capital=company.cost_of_capital
+    )
 
-    return {"status": "success", "data": results}
+    # 5. Build Renewal Package
+    renewal_package = {
+        "current_contract": {
+            "type": contract.contract_type if contract else "None",
+            "priority": contract.priority if contract else 0,
+            "limit": contract.limit if contract else 0,
+            "cession_pct": contract.cession_pct if contract else 0
+        },
+        "suggested_contract": {
+            "type": "XoL" if "Prioridad" in str(deltas["suggestions"]) else "QS",
+            "priority": optimization["suggested_retention"],
+            "limit": ibnr_res["ibnr_estimate"] - optimization["suggested_retention"],
+            "cession_pct": 0 if "XoL" in "XoL" else 100 - (optimization["suggested_retention"] / ibnr_res["ibnr_estimate"] * 100),
+        },
+        "analysis": {
+            "delta_frequency": deltas["delta_frequency"],
+            "delta_severity": deltas["delta_severity"],
+            "trend": deltas["trend"],
+            "suggestions": deltas["suggestions"],
+            "solvency_alert": optimization["alert_status"]
+        },
+        "premium_adjustment": "Sugerir incremento del 5-10% en la prima de reaseguro" if deltas["trend"] == "Volatilidad al Alza" else "Mantener prima actual"
+    }
 
-@app.get("/actuarial/analysis")
+    return renewal_package
+
+@app.post("/actuarial/contracts/activate")
+async def activate_contract(
+    ramo: str = Query(...),
+    contract_type: str = Query(...),
+    priority: float = Query(...),
+    limit: float = Query(...),
+    cession_pct: float = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.database import ReinsuranceContract
+
+    # Mark old active contracts for this ramo as Expired
+    db.query(ReinsuranceContract).filter(
+        ReinsuranceContract.company_id == current_user.company_id,
+        ReinsuranceContract.ramo == ramo,
+        ReinsuranceContract.status == "Active"
+    ).update({"status": "Expired"})
+
+    # Create new active contract
+    new_contract = ReinsuranceContract(
+        company_id=current_user.company_id,
+        ramo=ramo,
+        contract_type=contract_type,
+        priority=priority,
+        limit=limit,
+        cession_pct=cession_pct,
+        effective_date=datetime.date.today(),
+        expiry_date=datetime.date.today() + datetime.timedelta(days=365),
+        status="Active"
+    )
+    db.add(new_contract)
+    db.commit()
+    db.refresh(new_contract)
+
+    return {"status": "success", "contract_id": new_contract.id}
 
 @app.get("/actuarial/analysis")
 async def get_analysis(
@@ -284,16 +372,49 @@ async def get_contract_draft(
 ):
     df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
     if df_summarized.empty:
-        raise HTTPException(status_code=404, detail="No hay datos cargados")
+        raise HTTPException(status_code=404, detail="No hay datos cargados para generar el borrador")
 
     engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
-    simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
-    reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
-    contract_info = engine.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
 
-    draft = engine.generate_contract_draft(ramo=target_ramo if target_ramo else "Global", contract_data=contract_info, ibnr=simulated_ibnr["ibnr_estimate"])
+    # Usamos el método Chain Ladder por defecto para el borrador si no se especifica
+    simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
+
+    # Optimización de reaseguro basada en el IBNR proyectado
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    reinsurance = engine.optimize_reinsurance(
+        ibnr_estimate=simulated_ibnr["ibnr_estimate"],
+        capital_limit=company.capital_limit if company else capital,
+        cost_of_capital=company.cost_of_capital if company else 0.10
+    )
+
+    # Diseño del contrato requiere datos brutos para el índice de volatilidad (CV)
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is not None and not df_raw.empty:
+        engine_raw = ActuarialEngine(df_raw)
+        contract_info = engine_raw.engineer_contract(
+            ramo=target_ramo,
+            ibnr_estimate=simulated_ibnr["ibnr_estimate"],
+            retention=reinsurance["suggested_retention"]
+        )
+    else:
+        # Fallback si no hay datos brutos: crear un contrato genérico basado en el IBNR
+        contract_info = {
+            "suggested_type": "Quota Share (QS)",
+            "volatility_index": 1.0,
+            "details": {
+                "retention_percentage": 20.0,
+                "cession_percentage": 80.0,
+                "structure": "Distribución proporcional basada en IBNR"
+            }
+        }
+
+    draft = engine.generate_contract_draft(
+        ramo=target_ramo if target_ramo else "Global",
+        contract_data=contract_info,
+        ibnr=simulated_ibnr["ibnr_estimate"]
+    )
     log_action(db, current_user, "GENERATE_CONTRACT", f"Borrador generado para ramo {target_ramo if target_ramo else 'Global'}")
 
     return draft
