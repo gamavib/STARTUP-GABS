@@ -9,10 +9,11 @@ docker logs insurance_saas_backend
 docker logs --tail 10 -f insurance_saas_backend
 docker rm -f insurance_saas_backend
 docker restart insurance_saas_backend
+docker restart insurance_saas_frontend
 
 
   1. Detén y elimina todo (contenedores, redes e imágenes locales del proyecto):     
-  docker-compose down --rmi all                                                      
+  docker-compose down -v --rmi all                                                      
   2. Limpia la caché de construcción de Docker:                                      
   docker builder prune -a -f                                                           
   3. Levanta el proyecto desde cero, forzando la reconstrucción sin usar caché:      

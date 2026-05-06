@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import datetime
 from typing import Dict, Any, List
 
 class ActuarialEngine:
@@ -30,7 +31,7 @@ class ActuarialEngine:
 
         return triangle
 
-    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None, method: str = 'chain_ladder', expected_loss_ratio: float = None, premiums: Dict[int, float] = None) -> Dict[str, Any]:
+    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None, method: str = 'chain_ladder', expected_loss_ratio: float = None, premiums: Dict[int, float] = None, tail_factor: float = 1.0) -> Dict[str, Any]:
         """
         Implements IBNR calculation using different methods.
         Methods: 'chain_ladder', 'bf' (Bornhuetter-Ferguson), 'cape_cod'.
@@ -38,11 +39,33 @@ class ActuarialEngine:
         # Apply severity multiplier to the whole triangle
         adj_tri = triangle * severity_multiplier
 
-        # 1. Calculate Age-to-Age Factors (LDF)
-        col_sums = adj_tri.sum(axis=0)
+        # 1. Calculate Age-to-Age Factors (S-Smoothed LDF)
+        # Instead of simple aggregate ratios, we use a weighted average of factors per origin year
+        # to reduce volatility from outlier years.
         ldfs = []
-        for i in range(len(col_sums) - 1):
-            factor = col_sums.iloc[i+1] / col_sums.iloc[i] if col_sums.iloc[i] != 0 else 1.0
+        num_cols = adj_tri.shape[1]
+
+        for i in range(num_cols - 1):
+            col_current = adj_tri.iloc[:, i]
+            col_next = adj_tri.iloc[:, i+1]
+
+            # Calculate weighted average LDF for period i -> i+1
+            # Weighted LDF = sum(current_val * (next_val/current_val)) / sum(current_val)
+            # Which simplifies to sum(next_val) / sum(current_val) if we use simple sums,
+            # but to truly smooth, we handle zero-division and volatility per row.
+
+            weighted_sum_next = 0.0
+            weighted_sum_current = 0.0
+
+            for val_curr, val_next in zip(col_current, col_next):
+                if val_curr > 0:
+                    # We only consider years that have reached this development stage
+                    weighted_sum_next += val_next
+                    weighted_sum_current += val_curr
+
+            factor = weighted_sum_next / weighted_sum_current if weighted_sum_current != 0 else 1.0
+            # Actuarial Constraint: LDFs in a cumulative triangle should be >= 1.0
+            factor = max(1.0, factor)
             ldfs.append(factor)
 
         # If custom LDFs are provided, override the calculated ones
@@ -53,6 +76,7 @@ class ActuarialEngine:
 
         # 2. Calculate Ultimate Losses based on the selected method
         ultimate_losses = []
+        projected_triangle = {} # Store the full projected triangle
 
         # For BF and Cape Cod, we need priors. If premiums are missing, we fallback to CL.
         effective_method = method
@@ -70,7 +94,7 @@ class ActuarialEngine:
 
             # Development factor from current stage to ultimate
             remaining_factors = ldfs[int(last_dev_year):]
-            cumulative_ldf = np.prod(remaining_factors) if remaining_factors else 1.0
+            cumulative_ldf = np.prod(remaining_factors) * tail_factor if remaining_factors else tail_factor
 
             if effective_method == 'chain_ladder':
                 # Simple Chain Ladder: Ultimate = Current * Cumulative LDF
@@ -78,30 +102,44 @@ class ActuarialEngine:
 
             elif effective_method == 'bf':
                 # Bornhuetter-Ferguson: Ultimate = Actual + (Prior * (1 - Development%))
-                # Prior = Premium * Expected Loss Ratio
                 premium = premiums.get(origin_year, 0) if premiums else 0
-                lr = expected_loss_ratio if expected_loss_ratio is not None else 0.6 # Default 60% if not provided
+                lr = expected_loss_ratio if expected_loss_ratio is not None else 0.6
                 prior_ultimate = premium * lr
-
-                # Development % is 1 / Cumulative LDF
                 dev_pct = 1.0 / cumulative_ldf if cumulative_ldf != 0 else 0
                 ultimate = current_val + (prior_ultimate * (1 - dev_pct))
 
             elif effective_method == 'cape_cod':
-                # Cape Cod: Similar to BF but uses historical Loss Ratio for the prior
+                # Cape Cod
                 premium = premiums.get(origin_year, 0) if premiums else 0
-                # Use historical average LDF as a proxy for LR if not provided
                 hist_lr = np.mean(ldfs) if ldfs else 0.6
                 prior_ultimate = premium * hist_lr
-
                 dev_pct = 1.0 / cumulative_ldf if cumulative_ldf != 0 else 0
                 ultimate = current_val + (prior_ultimate * (1 - dev_pct))
 
             else:
-                # Fallback
                 ultimate = current_val * cumulative_ldf
 
+            ultimate = max(current_val, ultimate)
             ultimate_losses.append(ultimate)
+
+            # Fill the projected triangle for this year
+            projected_triangle[origin_year] = {}
+
+            # 1. Copy actuals
+            for col_idx, val in enumerate(year_data):
+                projected_triangle[origin_year][col_idx] = float(val)
+
+            # 2. Project intermediate values using LDFs
+            last_actual_idx = len(non_zero_cols) - 1 if len(non_zero_cols) > 0 else -1
+            if last_actual_idx >= 0:
+                current_val_proj = float(year_data.iloc[last_actual_idx])
+                for next_idx in range(last_actual_idx + 1, len(ldfs)):
+                    # Project forward: next_val = current_val * LDF
+                    current_val_proj *= ldfs[next_idx]
+                    projected_triangle[origin_year][next_idx] = float(current_val_proj)
+
+            # 3. The final point is the ultimate
+            projected_triangle[origin_year][len(ldfs)] = float(ultimate)
 
         ultimate_sum = sum(ultimate_losses)
         actual_sum = adj_tri.sum().sum()
@@ -112,7 +150,8 @@ class ActuarialEngine:
             "ultimate_losses": float(ultimate_sum),
             "ibnr_estimate": float(ibnr),
             "development_factors": {f"dev_{i+1}_{i+2}": ldfs[i] for i in range(len(ldfs))},
-            "method_used": effective_method
+            "method_used": effective_method,
+            "projected_triangle": projected_triangle
         }
 
     def compare_reserves(self, ibnr_estimate: float, ramo: str = None) -> Dict[str, Any]:
@@ -176,26 +215,56 @@ class ActuarialEngine:
 
     def optimize_reinsurance(self, ibnr_estimate: float, capital_limit: float, cost_of_capital: float = 0.10) -> Dict[str, Any]:
         """
-        Optimizes retention based on cost of capital and solvency limits.
+        Optimizes retention based on Economic Capital (EC) model.
+        Minimizes Total Cost of Risk (TCR) = Capital Charge + Ceding Cost.
         """
-        # Logic: Retention is a trade-off between cost of capital and reinsurance cost.
-        # For this model, we use a risk-adjusted retention.
-        # If cost of capital is high, we tend to cede more.
-        retention_factor = 1.0 - (cost_of_capital * 0.5) # Simplified impact of cost of capital
-        suggested_retention = min(capital_limit * 0.4 * retention_factor, ibnr_estimate)
-        ceded_amount = max(0, ibnr_estimate - suggested_retention)
+        # Calculate portfolio volatility (Std Dev of paid claims)
+        # We use the raw df if available, otherwise fallback to a baseline volatility
+        if hasattr(self, 'df') and 'monto_pagado' in self.df.columns:
+            volatility = self.df['monto_pagado'].std()
+        else:
+            volatility = ibnr_estimate * 0.2  # Baseline 20% volatility fallback
+
+        # Constants for EC Model
+        z_score = 2.58  # 99.5% Confidence Level (Standard for Solvency II)
+        reinsurance_loading = 0.15  # Reinsurers charge a premium above the expected loss
+
+        # TCR Optimization: Iterate through potential retention levels to find minimum cost
+        best_retention = 0.0
+        min_tcr = float('inf')
+
+        # Test retentions from 0 to 100% of IBNR in 1% increments
+        for pct in np.linspace(0, 1, 101):
+            retention = ibnr_estimate * pct
+            ceded = ibnr_estimate - retention
+
+            # 1. Required Capital for retained risk
+            # Approx: Expected Loss + (z * Volatility * sqrt(retention_ratio))
+            retention_ratio = pct if ibnr_estimate > 0 else 0
+            required_capital = (ibnr_estimate * retention_ratio) + (z_score * volatility * np.sqrt(retention_ratio))
+            capital_charge = required_capital * cost_of_capital
+
+            # 2. Cost of Ceding
+            # Cost = Amount ceded * (1 + loading)
+            ceding_cost = ceded * reinsurance_loading
+
+            tcr = capital_charge + ceding_cost
+
+            if tcr < min_tcr:
+                min_tcr = tcr
+                best_retention = retention
 
         # Solvency Alert: If IBNR is > 30% of capital limit, trigger urgent cession
         solvency_ratio = ibnr_estimate / capital_limit if capital_limit != 0 else 0
         alert_status = "Sugerir Cesión Urgente" if solvency_ratio > 0.30 else "Sostenible"
 
         return {
-            "suggested_retention": float(suggested_retention),
-            "ceded_amount": float(ceded_amount),
-            "retention_percentage": (suggested_retention / ibnr_estimate * 100) if ibnr_estimate != 0 else 0,
+            "suggested_retention": float(best_retention),
+            "ceded_amount": float(max(0, ibnr_estimate - best_retention)),
+            "retention_percentage": (best_retention / ibnr_estimate * 100) if ibnr_estimate != 0 else 0,
             "solvency_ratio": float(solvency_ratio),
             "alert_status": alert_status,
-            "recommendation": f"Estado: {alert_status}. Retención optimizada considerando costo de capital del {cost_of_capital*100}%."
+            "recommendation": f"Optimización EC: Retención de ${best_retention:,.2f} minimiza el Costo Total de Riesgo considerando volatilidad y costo de capital del {cost_of_capital*100}%."
         }
 
     def analyze_renewal_deltas(self, current_metrics: Dict[str, Any], previous_metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -305,12 +374,87 @@ class ActuarialEngine:
 
         return results
 
+    def analyze_burn_through(self, priority: float, limit: float, ramo: str = None) -> Dict[str, Any]:
+        """
+        Analyzes how much of the reinsurance layer was 'burned through' by actual claims.
+        Essential for determining if the priority needs to be increased in the renewal.
+        """
+        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo] if 'ramo' in self.df.columns else self.df
+
+        if 'monto_pagado' not in data.columns:
+            return {"error": "Se requieren datos detallados para el análisis de burn-through"}
+
+        severities = data['monto_pagado']
+
+        # Only claims that exceed the priority contribute to the burn-through
+        excess_claims = severities[severities > priority]
+
+        total_burn = (excess_claims - priority).sum()
+        burn_percentage = (total_burn / limit * 100) if limit > 0 else 0
+
+        # Count how many claims actually hit the reinsurance layer
+        hit_count = len(excess_claims)
+
+        return {
+            "total_burn_amount": float(total_burn),
+            "burn_percentage": float(burn_percentage),
+            "claims_hitting_layer": int(hit_count),
+            "status": "Agotamiento Alto" if burn_percentage > 70 else "Agotamiento Medio" if burn_percentage > 30 else "Capa Estable",
+            "recommendation": "Aumentar Prioridad" if burn_percentage > 50 else "Mantener Estructura"
+        }
+
+    def generate_renewal_package_data(self, ramo: str, ibnr_res: Dict[str, Any], optimization: Dict[str, Any], deltas: Dict[str, Any], burn_through: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Consolidates all technical data into a structured format for the Renewal PDF.
+        """
+        return {
+            "report_header": {
+                "title": "Renewal Technical Package",
+                "ramo": ramo,
+                "date": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+                "status": "Technical Proposal"
+            },
+            "ibnr_section": {
+                "actual_losses": ibnr_res["actual_losses"],
+                "ultimate_losses": ibnr_res["ultimate_losses"],
+                "ibnr_estimate": ibnr_res["ibnr_estimate"],
+                "method": ibnr_res["method_used"]
+            },
+            "reinsurance_section": {
+                "suggested_retention": optimization["suggested_retention"],
+                "ceded_amount": optimization["ceded_amount"],
+                "solvency_ratio": optimization["solvency_ratio"],
+                "burn_through_pct": burn_through["burn_percentage"],
+                "burn_status": burn_through["status"]
+            },
+            "trend_analysis": {
+                "delta_freq": deltas["delta_frequency"],
+                "delta_sev": deltas["delta_severity"],
+                "trend": deltas["trend"],
+                "suggestions": deltas["suggestions"]
+            }
+        }
+
     def generate_contract_draft(self, ramo: str, contract_data: Dict[str, Any], ibnr: float) -> Dict[str, Any]:
         if "error" in contract_data:
             return {"error": contract_data["error"]}
 
         type_name = contract_data["suggested_type"]
         details = contract_data["details"]
+
+        draft = {
+            "header": {
+                "document_type": "Borrador de Contrato de Reaseguro",
+                "ramo": ramo,
+                "currency": "USD",
+                "version": "1.0-AutoGenerated"
+            },
+            "technical_basis": {
+                "projected_ibnr": ibnr,
+                "volatility_index": contract_data["volatility_index"]
+            },
+            "clauses": []
+        }
 
         draft = {
             "header": {

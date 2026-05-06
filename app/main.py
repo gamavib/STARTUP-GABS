@@ -191,7 +191,15 @@ async def renew_contract(
         raise HTTPException(status_code=404, detail="No hay datos cargados para este ramo")
 
     engine = ActuarialEngine(df_summarized)
-    current_metrics = engine.analyze_frequency_severity(ramo=ramo)
+
+    # FIX: analyze_frequency_severity requires raw data, not summarized data
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is not None:
+        raw_engine = ActuarialEngine(df_raw)
+        current_metrics = raw_engine.analyze_frequency_severity(ramo=ramo)
+    else:
+        current_metrics = {"frecuencia": 0, "severidad": 0, "total_siniestros": 0, "total_polizas": 0}
+
 
     # We'll simulate "Previous Metrics" by taking data from 1 year ago if available
     # For a real implementation, we would store snapshots of metrics per year
@@ -449,6 +457,29 @@ def get_summarized_claims(db: Session, company_id: int, ramo: str = None, metric
 
     return pd.DataFrame(query.all(), columns=['origin_year', 'dev_year', 'total'])
 
+@app.get("/actuarial/backtesting")
+async def get_backtesting(
+    ramo: str = Query(None),
+    method: str = Query("chain_ladder"),
+    expected_loss_ratio: float = Query(0.6),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+    engine = ActuarialEngine(df_summarized)
+
+    results = engine.perform_backtesting(
+        method=method,
+        expected_loss_ratio=expected_loss_ratio,
+        premiums=premiums
+    )
+
+    return results
+
 @app.get("/actuarial/ramos")
 async def get_ramos(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ramos = db.query(Claim.ramo).distinct().filter(Claim.company_id == current_user.company_id).all()
@@ -495,13 +526,14 @@ async def calculate_custom_ibnr(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df = get_df_from_db(db, current_user.company_id)
-    if df is None:
+    # Get summarized data instead of raw DF to avoid pivot errors in build_triangle
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo, metric)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
     premiums = get_premiums_for_company(db, current_user.company_id, ramo)
 
-    engine = ActuarialEngine(df)
+    engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo, metric=metric)
 

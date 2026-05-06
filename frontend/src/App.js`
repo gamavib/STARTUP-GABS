@@ -22,6 +22,7 @@ function App() {
     const [renewalData, setRenewalData] = useState(null);
     const [ramosList, setRamosList] = useState([]);
 
+
     const fetchRamos = async () => {
         try {
             const data = await api.getRamos(auth.token);
@@ -58,6 +59,7 @@ function App() {
             await fetchProjections();
             await fetchRamos();
         } catch (error) {
+
             alert('Error al cargar archivo');
         } finally {
             setLoading(false);
@@ -136,7 +138,7 @@ function App() {
         try {
             const data = await api.getBacktestingData({
                 ramo,
-                method: 'chain_ladder',
+                method: 'chain_ladder', // Default, but could be linked to state
                 token: auth.token
             });
             setValidationData(data);
@@ -160,58 +162,6 @@ function App() {
             console.error("Error fetching renewal data:", error);
         } finally {
             setLoading(false);
-        }
-    };
-
-    const renderContent = () => {
-        switch (activeTab) {
-            case 'executive':
-                return (
-                    <ActuarialDashboard
-                        data={analysisData}
-                        projectionData={projectionData}
-                        contractDraft={contractDraft}
-                        onDownloadContract={handleDownloadContract}
-                    />
-                );
-            case 'actuarial':
-                return (
-                    <TriangleViewer
-                        initialTriangleData={triangleData}
-                        initialRamo={ramo}
-                        token={auth.token}
-                        onRamoChange={(newRamo) => setRamo(newRamo)}
-                    />
-                );
-            case 'validation':
-                return (
-                    <div style={{ minHeight: '400px' }}>
-                        {validationData && Array.isArray(validationData) ? (
-                            <BacktestingViewer
-                                data={validationData}
-                                loading={loading}
-                            />
-                        ) : (
-                            <div style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
-                                {loading ? 'Cargando datos de validación...' : 'No hay datos de validación disponibles o el formato es incorrecto.'}
-                            </div>
-                        )}
-                    </div>
-                );
-            case 'renewal':
-                return (
-                    <RenewalViewer
-                        data={renewalData}
-                        token={auth.token}
-                        ramo={ramo}
-                        onActivate={() => {
-                            setActiveTab('executive');
-                            fetchRenewal();
-                        }}
-                    />
-                );
-            default:
-                return null;
         }
     };
 
@@ -383,7 +333,44 @@ function App() {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {renderContent()}
+                {activeTab === 'executive' ? (
+                    <ActuarialDashboard
+                        data={analysisData}
+                        projectionData={projectionData}
+                        contractDraft={contractDraft}
+                        onDownloadContract={handleDownloadContract}
+                    />
+                ) : activeTab === 'actuarial' ? (
+                    <TriangleViewer
+                        initialTriangleData={triangleData}
+                        initialRamo={ramo}
+                        token={auth.token}
+                        onRamoChange={(newRamo) => setRamo(newRamo)}
+                    />
+                ) : activeTab === 'validation' ? (
+                    <div style={{ minHeight: '400px' }}>
+                        {validationData && Array.isArray(validationData) ? (
+                            <BacktestingViewer
+                                data={validationData}
+                                loading={loading}
+                            />
+                        ) : (
+                            <div style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
+                                {loading ? 'Cargando datos de validación...' : 'No hay datos de validación disponibles o el formato es incorrecto.'}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <RenewalViewer
+                        data={renewalData}
+                        token={auth.token}
+                        ramo={ramo}
+                        onActivate={() => {
+                            setActiveTab('executive');
+                            fetchRenewal();
+                        }}
+                    />
+                )
             </div>
         </div>
     );

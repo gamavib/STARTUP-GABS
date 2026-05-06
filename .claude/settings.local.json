@@ -14,7 +14,8 @@
       "Bash(docker builder prune:*)",
       "Bash(docker compose up:*)",
       "Bash(docker compose ps:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(pip install *)"
     ]
   }
 }

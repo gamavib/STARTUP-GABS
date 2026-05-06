@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange }) => {
     const [triangleData, setTriangleData] = useState(initialTriangleData);
@@ -10,6 +11,12 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
     const [customLdfs, setCustomLdfs] = useState([]);
     const [method, setMethod] = useState('chain_ladder');
     const [expectedLossRatio, setExpectedLossRatio] = useState(0.6);
+
+    useEffect(() => {
+        if (triangleData && !ibnrResults) {
+            calculateIBNR(ramo, metric, [], method, expectedLossRatio);
+        }
+    }, [triangleData, ibnrResults]);
 
     const fetchTriangle = async (selectedRamo, selectedMetric) => {
         if (!token) {
@@ -47,6 +54,7 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                 expected_loss_ratio: lr,
                 token: token
             });
+            console.log("IBNR Results received:", results); // Debugging
             setIbnrResults(results);
         } catch (error) {
             console.error("Error calculating IBNR:", error);
@@ -119,8 +127,55 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
 
     const grandTotal = Object.values(rowTotals).reduce((a, b) => a + b, 0);
 
+    // Función para generar el color del Heatmap basado en el monto
+    const getHeatmapColor = (value) => {
+        if (value === 0) return '#ffeaea'; // Rojo pálido para vacíos
+        if (value === 0) return 'white';
+
+        const maxVal = Math.max(...Object.values(triangle_data).flatMap(row => Object.values(row)));
+        if (maxVal === 0) return 'white';
+
+        const intensity = Math.min(value / maxVal, 1);
+        // Escala de azules: blanco (bajo) -> azul claro -> azul fuerte (alto)
+        return `rgba(52, 152, 219, ${intensity * 0.8})`;
+    };
+
+    const getProjectedColor = (value) => {
+        if (value === 0) return 'white';
+        return `rgba(46, 204, 113, ${Math.min(value / (grandTotal / (years.length || 1)), 0.4)})`;
+    };
+
+    // Preparar datos para la curva de desarrollo acumulado
+    const prepareDevelopmentCurve = (ibnrResults) => {
+        if (years.length === 0) return [];
+
+        const curveData = [];
+        const latestYear = years[years.length - 1];
+
+        devYears.forEach((devYear, idx) => {
+            const accumulated = years.reduce((sum, year) => {
+                return sum + (triangle_data[year][devYear] || 0);
+            }, 0);
+
+            // Proyectar el valor ultimate para el último punto
+            let projectedValue = null;
+            if (idx === devYears.length - 1 && ibnrResults) {
+                projectedValue = ibnrResults.ultimate_losses;
+            }
+
+            curveData.push({
+                developmentYear: `Año ${devYear}`,
+                actual: accumulated,
+                projected: projectedValue,
+            });
+        });
+
+        return curveData;
+    };
+
     // Generar LDFs sugeridos basados en los datos actuales para los inputs
     const suggestedLdfs = [];
+
     if (devYears.length > 1) {
         for (let i = 0; i < devYears.length - 1; i++) {
             const colCurrent = colTotals[devYears[i]];
@@ -229,7 +284,7 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                                     Año {devYear}
                                 </th>
                             ))}
-                            <th style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#e9ecef', color: '#2c3e50' }}>Total Fila</th>
+                            <th style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#e9ecef', color: '#2c3e50' }}>Total Fila / Ultimate</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -243,7 +298,7 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                                             border: '1px solid #ddd',
                                             padding: '10px',
                                             textAlign: 'right',
-                                            backgroundColor: triangle_data[year][devYear] === 0 ? '#ffeaea' : 'white'
+                                            backgroundColor: getHeatmapColor(triangle_data[year][devYear])
                                         }}
                                     >
                                         {triangle_data[year][devYear].toLocaleString(undefined, {
@@ -312,6 +367,60 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                                 })}
                             </td>
                         </tr>
+                        {ibnrResults && ibnrResults.projected_triangle && (
+                            <>
+                                <tr>
+                                    <td colSpan={devYears.length + 2} style={{
+                                        border: '1px solid #ddd',
+                                        padding: '15px',
+                                        textAlign: 'center',
+                                        fontWeight: 'bold',
+                                        backgroundColor: '#f8f9fa',
+                                        color: '#2c3e50',
+                                        fontSize: '14px'
+                                    }}>
+                                        Cálculo de IBNR basándose en el Triángulo Proyectado (Ultimate Values)
+                                    </td>
+                                </tr>
+                                {years.map(year => {
+                                    const projectedRow = ibnrResults.projected_triangle[year];
+                                    return (
+                                        <tr key={`proj-${year}`} style={{ backgroundColor: '#f0fff4' }}>
+                                            <td style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#fbfbfb', textAlign: 'left' }}>{year} (Proj)</td>
+                                            {devYears.map((devYear, idx) => (
+                                                <td
+                                                    key={`proj-${year}-${devYear}`}
+                                                    style={{
+                                                        border: '1px solid #ddd',
+                                                        padding: '10px',
+                                                        textAlign: 'right',
+                                                        backgroundColor: getProjectedColor(projectedRow?.[idx] || 0)
+                                                    }}
+                                                >
+                                                    {(projectedRow?.[idx] || 0).toLocaleString(undefined, {
+                                                        minimumFractionDigits: 2,
+                                                        maximumFractionDigits: 2
+                                                    })}
+                                                </td>
+                                            ))}
+                                            <td style={{
+                                                border: '1px solid #ddd',
+                                                padding: '10px',
+                                                textAlign: 'right',
+                                                fontWeight: 'bold',
+                                                backgroundColor: '#e6ffed',
+                                                color: '#27ae60'
+                                            }}>
+                                                {(projectedRow?.[devYears.length] || 0).toLocaleString(undefined, {
+                                                    minimumFractionDigits: 2,
+                                                    maximumFractionDigits: 2
+                                                })}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </>
+                        )}
                     </tbody>
                 </table>
             </div>
@@ -319,6 +428,41 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
             <div style={{ marginTop: '20px', fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <span style={{ color: '#e74c3c', fontWeight: 'bold' }}>●</span> Las celdas en rojo indican períodos sin datos (valor 0).
                 <span style={{ marginLeft: '20px', color: '#3498db', fontWeight: 'bold' }}>⚙️</span> Modifica los LDFs en la fila de totales para ajustar la reserva técnica.
+            </div>
+
+            <div style={{ marginTop: '40px', padding: '20px', backgroundColor: '#f8f9fa', borderRadius: '12px', border: '1px solid #ddd' }}>
+                <h3 style={{ color: '#2c3e50', fontSize: '18px', marginBottom: '20px', textAlign: 'center' }}>Curva de Desarrollo Acumulado</h3>
+                <div style={{ width: '100%', height: '400px' }}>
+                    <ResponsiveContainer>
+                        <LineChart data={prepareDevelopmentCurve(ibnrResults)}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="developmentYear" />
+                            <YAxis />
+                            <Tooltip formatter={(value) => `$${value?.toLocaleString()}`} />
+                            <Legend />
+                            <Line
+                                type="monotone"
+                                dataKey="actual"
+                                stroke="#3498db"
+                                strokeWidth={3}
+                                dot={{ r: 6 }}
+                                activeDot={{ r: 8 }}
+                                name="Siniestros Acumulados (Real)"
+                            />
+                            {ibnrResults && (
+                                <Line
+                                    type="monotone"
+                                    dataKey="projected"
+                                    stroke="#2ecc71"
+                                    strokeWidth={3}
+                                    strokeDasharray="5 5"
+                                    dot={{ r: 6 }}
+                                    name="Proyección Ultimate (Actuarial)"
+                                />
+                            )}
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
             </div>
         </div>
     );
