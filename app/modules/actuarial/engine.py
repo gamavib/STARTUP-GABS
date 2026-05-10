@@ -4,25 +4,72 @@ import datetime
 from typing import Dict, Any, List
 
 class ActuarialEngine:
-    def __init__(self, df_summarized: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame):
         """
-        The engine now expects a summarized DataFrame (origin_year, dev_year, total)
-        instead of raw claim data.
+        The engine accepts a DataFrame. It can be either raw claim data
+        or summarized data (origin_year, dev_year, total).
         """
-        self.df = df_summarized.copy()
-        # No longer need to convert dates to datetime because the DB already provides years
+        self.raw_df = df.copy()
+
+        # Determine if the provided df is already summarized or raw
+        # Summarized df typically has ['origin_year', 'dev_year', 'total']
+        self.is_summarized = all(col in df.columns for col in ['origin_year', 'dev_year', 'total']) and \
+                             len(df.columns) <= 5 # Roughly
+
+        if self.is_summarized:
+            self.summarized_df = self.raw_df
+        else:
+            # If raw, we provide a helper to summarize it when needed for the triangle
+            self.summarized_df = None
+
+    def get_summarized_data(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
+        """
+        Returns the summarized version of the data.
+        If the engine was initialized with raw data, it performs the aggregation here.
+        """
+        if self.is_summarized:
+            return self.raw_df
+
+        # Perform aggregation from raw data
+        df = self.raw_df.copy()
+        if ramo and 'ramo' in df.columns:
+            df = df[df['ramo'] == ramo]
+
+        # Calculate origin_year and dev_year from dates if not present
+        if 'origin_year' not in df.columns:
+            # Ensure dates are parsed correctly (dayfirst=True for DD/MM/YYYY)
+            df['occurrence_date_dt'] = pd.to_datetime(df['fecha_ocurrencia'], dayfirst=True, errors='coerce')
+            df['report_date_dt'] = pd.to_datetime(df['fecha_reporte'], dayfirst=True, errors='coerce')
+
+            df['origin_year'] = df['occurrence_date_dt'].dt.year
+            df['dev_year'] = df['report_date_dt'].dt.year - df['occurrence_date_dt'].dt.year
+
+            # Drop helper columns
+            df = df.drop(columns=['occurrence_date_dt', 'report_date_dt'])
+
+        # This is a simplified aggregation logic that should match the DB's logic
+        # Assuming raw data has 'origin_year', 'dev_year' and the metric column
+        metric_col = 'monto_pagado' if metric == 'paid' else 'monto_reserva' if metric == 'reserve' else 'total'
+
+        if metric_col not in df.columns:
+            # Fallback or error
+            return pd.DataFrame(columns=['origin_year', 'dev_year', 'total'])
+
+        summarized = df.groupby(['origin_year', 'dev_year'])[metric_col].sum().reset_index()
+        summarized.rename(columns={metric_col: 'total'}, inplace=True)
+        return summarized
 
 
     def build_triangle(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
         """
         Transforms the summarized DataFrame into a triangle matrix.
         """
-        # The data is already filtered by ramo and aggregated by the DB
-        if self.df.empty:
+        df_sum = self.get_summarized_data(ramo, metric)
+        if df_sum.empty:
             raise ValueError(f"No hay datos disponibles para el ramo: {ramo if ramo else 'Global'}")
 
         # Pivot the pre-aggregated data
-        triangle = self.df.pivot_table(
+        triangle = df_sum.pivot_table(
             index='origin_year',
             columns='dev_year',
             values='total',
@@ -49,17 +96,22 @@ class ActuarialEngine:
             col_current = adj_tri.iloc[:, i]
             col_next = adj_tri.iloc[:, i+1]
 
-            # Calculate weighted average LDF for period i -> i+1
-            # Weighted LDF = sum(current_val * (next_val/current_val)) / sum(current_val)
-            # Which simplifies to sum(next_val) / sum(current_val) if we use simple sums,
-            # but to truly smooth, we handle zero-division and volatility per row.
+            # Correct Actuarial LDF:
+            # For the development from column i to i+1, only rows that have
+            # reached development stage i+1 can be used.
+            # This means we exclude the last (i+1) rows of the current column.
 
             weighted_sum_next = 0.0
             weighted_sum_current = 0.0
 
-            for val_curr, val_next in zip(col_current, col_next):
+            # Only iterate through rows that have a value in the next column
+            # In a standard triangle, this means excluding the last i+1 rows
+            num_rows_to_consider = len(adj_tri) - (i + 1)
+            for row_idx in range(num_rows_to_consider):
+                val_curr = col_current.iloc[row_idx]
+                val_next = col_next.iloc[row_idx]
+
                 if val_curr > 0:
-                    # We only consider years that have reached this development stage
                     weighted_sum_next += val_next
                     weighted_sum_current += val_curr
 
@@ -132,14 +184,19 @@ class ActuarialEngine:
             # 2. Project intermediate values using LDFs
             last_actual_idx = len(non_zero_cols) - 1 if len(non_zero_cols) > 0 else -1
             if last_actual_idx >= 0:
+                # Start projecting from the last actual value
                 current_val_proj = float(year_data.iloc[last_actual_idx])
-                for next_idx in range(last_actual_idx + 1, len(ldfs)):
-                    # Project forward: next_val = current_val * LDF
-                    current_val_proj *= ldfs[next_idx]
+
+                # We need to project values for columns from (last_actual_idx + 1) up to (num_cols - 1)
+                # The LDF that takes us from col j-1 to col j is stored at ldfs[j-1]
+                for next_idx in range(last_actual_idx + 1, num_cols):
+                    # LDF for the transition from (next_idx - 1) to (next_idx)
+                    factor = ldfs[next_idx - 1] if (next_idx - 1) < len(ldfs) else 1.0
+                    current_val_proj *= factor
                     projected_triangle[origin_year][next_idx] = float(current_val_proj)
 
-            # 3. The final point is the ultimate
-            projected_triangle[origin_year][len(ldfs)] = float(ultimate)
+            # 3. The final point (Ultimate) is at index num_cols
+            projected_triangle[origin_year][num_cols] = float(ultimate)
 
         ultimate_sum = sum(ultimate_losses)
         actual_sum = adj_tri.sum().sum()
@@ -155,13 +212,11 @@ class ActuarialEngine:
         }
 
     def compare_reserves(self, ibnr_estimate: float, ramo: str = None) -> Dict[str, Any]:
-        # Use self.df but handle the case where it might be summarized
-        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo] if 'ramo' in self.df.columns else self.df
+        # Use raw_df for detailed reserve analysis
+        data = self.raw_df if (ramo is None or ramo == "") else self.raw_df[self.raw_df['ramo'] == ramo] if 'ramo' in self.raw_df.columns else self.raw_df
 
         if 'monto_reserva' not in data.columns:
-            # If data is summarized, we can't sum monto_reserva here.
-            # This method should be called with the raw DataFrame.
-            return {"error": "Se requieren datos detallados para comparar reservas"}
+            return {"error": "Se requieren datos detallados (monto_reserva) para comparar reservas"}
 
         reserva_contable = data['monto_reserva'].sum()
         diff = ibnr_estimate - reserva_contable
@@ -176,7 +231,11 @@ class ActuarialEngine:
         }
 
     def analyze_frequency_severity(self, ramo: str = None) -> Dict[str, Any]:
-        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
+        data = self.raw_df if (ramo is None or ramo == "") else self.raw_df[self.raw_df['ramo'] == ramo] if 'ramo' in self.raw_df.columns else self.raw_df
+
+        if 'id_poliza' not in data.columns or 'monto_pagado' not in data.columns:
+            return {"error": "Se requieren datos detallados (id_poliza, monto_pagado) para este análisis"}
+
         num_siniestros = len(data)
         num_polizas = data['id_poliza'].nunique()
         total_pagado = data['monto_pagado'].sum()
@@ -191,7 +250,11 @@ class ActuarialEngine:
         }
 
     def analyze_severity_distribution(self, ramo: str = None) -> Dict[str, Any]:
-        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo]
+        data = self.raw_df if (ramo is None or ramo == "") else self.raw_df[self.raw_df['ramo'] == ramo] if 'ramo' in self.raw_df.columns else self.raw_df
+
+        if 'monto_pagado' not in data.columns:
+            return {"error": "Se requieren datos detallados (monto_pagado) para este análisis"}
+
         severities = data['monto_pagado']
 
         if severities.empty:
@@ -219,9 +282,9 @@ class ActuarialEngine:
         Minimizes Total Cost of Risk (TCR) = Capital Charge + Ceding Cost.
         """
         # Calculate portfolio volatility (Std Dev of paid claims)
-        # We use the raw df if available, otherwise fallback to a baseline volatility
-        if hasattr(self, 'df') and 'monto_pagado' in self.df.columns:
-            volatility = self.df['monto_pagado'].std()
+        # We use the raw_df if available, otherwise fallback to a baseline volatility
+        if 'monto_pagado' in self.raw_df.columns:
+            volatility = self.raw_df['monto_pagado'].std()
         else:
             volatility = ibnr_estimate * 0.2  # Baseline 20% volatility fallback
 
@@ -296,8 +359,8 @@ class ActuarialEngine:
         }
 
     def engineer_contract(self, ramo: str = None, ibnr_estimate: float = 0, retention: float = 0) -> Dict[str, Any]:
-        # Use self.df but handle the case where it might be summarized
-        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo] if 'ramo' in self.df.columns else self.df
+        # Use raw_df but handle the case where it might be summarized
+        data = self.raw_df if (ramo is None or ramo == "") else self.raw_df[self.raw_df['ramo'] == ramo] if 'ramo' in self.raw_df.columns else self.raw_df
 
         if 'monto_pagado' not in data.columns:
             return {"error": "Se requieren datos detallados para diseñar el contrato"}
@@ -334,10 +397,11 @@ class ActuarialEngine:
         """
         Performs back-testing by simulating historical data snapshots.
         """
-        if self.df.empty:
+        df_sum = self.get_summarized_data()
+        if df_sum.empty:
             return []
 
-        origin_years = sorted(self.df['origin_year'].unique())
+        origin_years = sorted(df_sum['origin_year'].unique())
         if len(origin_years) < 2:
             return []
 
@@ -360,7 +424,7 @@ class ActuarialEngine:
             )
 
             est = ibnr_res["ibnr_estimate"]
-            cur_tot = self.df[self.df['origin_year'] <= snapshot_year]['total'].sum()
+            cur_tot = df_sum[df_sum['origin_year'] <= snapshot_year]['total'].sum()
             snap_tot = snapshot_tri.sum().sum()
             act = cur_tot - snap_tot
 
@@ -379,7 +443,7 @@ class ActuarialEngine:
         Analyzes how much of the reinsurance layer was 'burned through' by actual claims.
         Essential for determining if the priority needs to be increased in the renewal.
         """
-        data = self.df if (ramo is None or ramo == "") else self.df[self.df['ramo'] == ramo] if 'ramo' in self.df.columns else self.df
+        data = self.raw_df if (ramo is None or ramo == "") else self.raw_df[self.raw_df['ramo'] == ramo] if 'ramo' in self.raw_df.columns else self.raw_df
 
         if 'monto_pagado' not in data.columns:
             return {"error": "Se requieren datos detallados para el análisis de burn-through"}
@@ -441,20 +505,6 @@ class ActuarialEngine:
 
         type_name = contract_data["suggested_type"]
         details = contract_data["details"]
-
-        draft = {
-            "header": {
-                "document_type": "Borrador de Contrato de Reaseguro",
-                "ramo": ramo,
-                "currency": "USD",
-                "version": "1.0-AutoGenerated"
-            },
-            "technical_basis": {
-                "projected_ibnr": ibnr,
-                "volatility_index": contract_data["volatility_index"]
-            },
-            "clauses": []
-        }
 
         draft = {
             "header": {

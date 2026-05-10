@@ -22,6 +22,7 @@ La plataforma es una solución de software como servicio (SaaS) diseñada para c
 - **Triángulos de Siniestralidad**: Construcción de matrices de Origen vs. Desarrollo optimizadas mediante agregaciones SQL.
 - **Cálculo de IBNR Avanzado**: 
     - **S-Smoothing**: Implementación de promedio ponderado de LDFs para reducir la volatilidad causada por años atípicos.
+    - **Lógica de Proyección**: Implementación de proyección paso a paso (Celdas $j = \text{Celda } j-1 \times \text{LDF}_{j-1}$), asegurando coherencia matemática en el triángulo proyectado.
     - **Tail Factor**: Proyección de pérdidas más allá del horizonte observado para evitar la subestimación de reservas.
     - **Modelos Soportados**: Chain Ladder, Bornhuetter-Ferguson (BF) y Cape Cod.
 - **Validación Estadística**: Back-testing mediante simulación de snapshots históricos y medición del error de predicción.

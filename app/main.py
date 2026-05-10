@@ -134,8 +134,8 @@ async def upload_csv(
             claim = Claim(
                 company_id=company_id,
                 external_id=str(row['id_siniestro']),
-                occurrence_date=pd.to_datetime(row['fecha_ocurrencia']).date(),
-                report_date=pd.to_datetime(row['fecha_reporte']).date(),
+                occurrence_date=pd.to_datetime(row['fecha_ocurrencia'], dayfirst=True).date(),
+                report_date=pd.to_datetime(row['fecha_reporte'], dayfirst=True).date(),
                 amount_paid=float(row['monto_pagado']),
                 amount_reserve=float(row['monto_reserva']),
                 ramo=str(row['ramo']),
@@ -186,22 +186,13 @@ async def renew_contract(
     ).first()
 
     # 2. Get Current Metrics
-    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
-    if df_summarized.empty:
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is None or df_raw.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados para este ramo")
 
-    engine = ActuarialEngine(df_summarized)
+    engine = ActuarialEngine(df_raw)
+    current_metrics = engine.analyze_frequency_severity(ramo=ramo)
 
-    # FIX: analyze_frequency_severity requires raw data, not summarized data
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is not None:
-        raw_engine = ActuarialEngine(df_raw)
-        current_metrics = raw_engine.analyze_frequency_severity(ramo=ramo)
-    else:
-        current_metrics = {"frecuencia": 0, "severidad": 0, "total_siniestros": 0, "total_polizas": 0}
-
-
-    # We'll simulate "Previous Metrics" by taking data from 1 year ago if available
     # For a real implementation, we would store snapshots of metrics per year
     previous_metrics = {
         "frecuencia": current_metrics["frecuencia"] * 0.9, # Simulated baseline
@@ -209,6 +200,7 @@ async def renew_contract(
         "total_siniestros": current_metrics["total_siniestros"] * 0.9,
         "total_polizas": current_metrics["total_polizas"]
     }
+
 
     # 3. Analyze Deltas
     deltas = engine.analyze_renewal_deltas(current_metrics, previous_metrics)
@@ -300,15 +292,14 @@ async def get_analysis(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
-    if df_summarized.empty:
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is None or df_raw.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
-
-    engine = ActuarialEngine(df_summarized)
+    engine = ActuarialEngine(df_raw)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
+    premiums = get_premiums_for_company(db, current_user.company_id, target_ramo)
     ibnr_results = engine.calculate_ibnr(
         triangle,
         method=method,
@@ -317,14 +308,8 @@ async def get_analysis(
     )
     comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=target_ramo)
 
-    # Analysis of frequency/severity requires raw data, not summarized triangle data
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is not None:
-        raw_engine = ActuarialEngine(df_raw) # temporary engine for raw analysis
-        metrics = raw_engine.analyze_frequency_severity(ramo=target_ramo)
-        severity_dist = raw_engine.analyze_severity_distribution(ramo=target_ramo)
-    else:
-        metrics, severity_dist = {}, {}
+    metrics = engine.analyze_frequency_severity(ramo=target_ramo)
+    severity_dist = engine.analyze_severity_distribution(ramo=target_ramo)
 
     return {
         "company_id": current_user.company_id,
@@ -345,23 +330,17 @@ async def get_projections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
-    if df_summarized.empty:
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is None or df_raw.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine_sum = ActuarialEngine(df_summarized)
+    engine = ActuarialEngine(df_raw)
     target_ramo = ramo if ramo else ""
-    triangle = engine_sum.build_triangle(ramo=target_ramo)
-    simulated_ibnr = engine_sum.calculate_ibnr(triangle, severity_multiplier=severity_adj)
-    reinsurance = engine_sum.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
+    triangle = engine.build_triangle(ramo=target_ramo)
+    simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
+    reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
 
-    # Design contract needs raw data for volatility analysis
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is not None:
-        engine_raw = ActuarialEngine(df_raw)
-        contract = engine_raw.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
-    else:
-        contract = {"error": "No se pudieron obtener datos brutos para el diseño del contrato"}
+    contract = engine.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
 
     return {
         "company_id": current_user.company_id,
@@ -378,11 +357,11 @@ async def get_contract_draft(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
-    if df_summarized.empty:
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is None or df_raw.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados para generar el borrador")
 
-    engine = ActuarialEngine(df_summarized)
+    engine = ActuarialEngine(df_raw)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
 
@@ -397,26 +376,11 @@ async def get_contract_draft(
         cost_of_capital=company.cost_of_capital if company else 0.10
     )
 
-    # Diseño del contrato requiere datos brutos para el índice de volatilidad (CV)
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is not None and not df_raw.empty:
-        engine_raw = ActuarialEngine(df_raw)
-        contract_info = engine_raw.engineer_contract(
-            ramo=target_ramo,
-            ibnr_estimate=simulated_ibnr["ibnr_estimate"],
-            retention=reinsurance["suggested_retention"]
-        )
-    else:
-        # Fallback si no hay datos brutos: crear un contrato genérico basado en el IBNR
-        contract_info = {
-            "suggested_type": "Quota Share (QS)",
-            "volatility_index": 1.0,
-            "details": {
-                "retention_percentage": 20.0,
-                "cession_percentage": 80.0,
-                "structure": "Distribución proporcional basada en IBNR"
-            }
-        }
+    contract_info = engine.engineer_contract(
+        ramo=target_ramo,
+        ibnr_estimate=simulated_ibnr["ibnr_estimate"],
+        retention=reinsurance["suggested_retention"]
+    )
 
     draft = engine.generate_contract_draft(
         ramo=target_ramo if target_ramo else "Global",
@@ -552,24 +516,19 @@ async def calculate_custom_ibnr(
 
 @app.get("/reports/executive")
 async def get_executive_report(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
-    if df_summarized.empty:
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is None or df_raw.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df_summarized)
+    engine = ActuarialEngine(df_raw)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
     ibnr_res = engine.calculate_ibnr(triangle)
     comp = engine.compare_reserves(ibnr_res["ibnr_estimate"], ramo=target_ramo)
 
     # Frequency and severity distribution require raw data
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is not None:
-        raw_engine = ActuarialEngine(df_raw)
-        metrics = raw_engine.analyze_frequency_severity(ramo=target_ramo)
-        sev_dist = raw_engine.analyze_severity_distribution(ramo=target_ramo)
-    else:
-        metrics, sev_dist = {}, {}
+    metrics = engine.analyze_frequency_severity(ramo=target_ramo)
+    sev_dist = engine.analyze_severity_distribution(ramo=target_ramo)
 
     return {
         "executive_summary": {

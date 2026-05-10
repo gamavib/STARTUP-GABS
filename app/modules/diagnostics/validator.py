@@ -29,8 +29,8 @@ def validate_insurance_csv(df: pd.DataFrame) -> ValidationResult:
 
     # 2. Validación de fechas ( intentamos convertir para verificar formato)
     try:
-        pd.to_datetime(df['fecha_ocurrencia'])
-        pd.to_datetime(df['fecha_reporte'])
+        pd.to_datetime(df['fecha_ocurrencia'], dayfirst=True)
+        pd.to_datetime(df['fecha_reporte'], dayfirst=True)
     except Exception as e:
         errors.append(f"Error en formato de fechas: {str(e)}")
 

@@ -12,11 +12,48 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
     const [method, setMethod] = useState('chain_ladder');
     const [expectedLossRatio, setExpectedLossRatio] = useState(0.6);
 
-    useEffect(() => {
-        if (triangleData && !ibnrResults) {
-            calculateIBNR(ramo, metric, [], method, expectedLossRatio);
+    const calculateSuggestedLdfs = (triangle_data_source) => {
+        const suggested = [];
+        const currentYears = Object.keys(triangle_data_source);
+        const currentDevYears = currentYears.length > 0 ? Object.keys(triangle_data_source[currentYears[0]]) : [];
+
+        if (currentDevYears.length > 1) {
+            for (let i = 0; i < currentDevYears.length - 1; i++) {
+                const currentDevYear = currentDevYears[i];
+                const nextDevYear = currentDevYears[i+1];
+                let sumCurrent = 0;
+                let sumNext = 0;
+                const yearsToSum = currentYears.slice(0, currentYears.length - (i + 1));
+                yearsToSum.forEach(year => {
+                    sumCurrent += triangle_data_source[year][currentDevYear] || 0;
+                    sumNext += triangle_data_source[year][nextDevYear] || 0;
+                });
+                suggested.push(sumNext / sumCurrent || 1.0);
+            }
         }
-    }, [triangleData, ibnrResults]);
+        return suggested;
+    };
+
+    const calculateIBNR = async (selectedRamo, selectedMetric, ldfs, selectedMethod = method, lr = expectedLossRatio) => {
+        setLoading(true);
+        try {
+            const results = await api.calculateCustomIBNR({
+                ramo: selectedRamo,
+                metric: selectedMetric,
+                customLdfs: ldfs,
+                severityAdj: 1.0,
+                method: selectedMethod,
+                expected_loss_ratio: lr,
+                token: token
+            });
+            console.log("IBNR Results received:", results);
+            setIbnrResults(results);
+        } catch (error) {
+            console.error("Error calculating IBNR:", error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const fetchTriangle = async (selectedRamo, selectedMetric) => {
         if (!token) {
@@ -33,8 +70,8 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
             });
             setTriangleData(data);
 
-            // Calcular IBNR inicial basándonos en los datos del triángulo
-            await calculateIBNR(selectedRamo, selectedMetric, [], method, expectedLossRatio);
+            const suggested = calculateSuggestedLdfs(data.triangle_data);
+            await calculateIBNR(selectedRamo, selectedMetric, suggested, method, expectedLossRatio);
         } catch (error) {
             alert('Error al actualizar los datos del triángulo');
         } finally {
@@ -42,26 +79,12 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
         }
     };
 
-    const calculateIBNR = async (selectedRamo, selectedMetric, ldfs, selectedMethod = method, lr = expectedLossRatio) => {
-        setLoading(true);
-        try {
-            const results = await api.calculateCustomIBNR({
-                ramo: selectedRamo,
-                metric: selectedMetric,
-                customLdfs: ldfs,
-                severityAdj: 1.0,
-                method: selectedMethod,
-                expected_loss_ratio: lr,
-                token: token
-            });
-            console.log("IBNR Results received:", results); // Debugging
-            setIbnrResults(results);
-        } catch (error) {
-            console.error("Error calculating IBNR:", error);
-        } finally {
-            setLoading(false);
+    useEffect(() => {
+        if (triangleData && !ibnrResults) {
+            const currentLdfs = calculateSuggestedLdfs(triangleData.triangle_data);
+            calculateIBNR(ramo, metric, currentLdfs, method, expectedLossRatio);
         }
-    };
+    }, [triangleData, ibnrResults]);
 
     const handleRamoChange = (e) => {
         const newRamo = e.target.value;
@@ -113,13 +136,11 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
         total: 'Total (Pagado + Reserva)'
     };
 
-    // Calcular totales por fila
     const rowTotals = {};
     years.forEach(year => {
         rowTotals[year] = Object.values(triangle_data[year]).reduce((a, b) => a + b, 0);
     });
 
-    // Calcular totales por columna
     const colTotals = {};
     devYears.forEach(devYear => {
         colTotals[devYear] = years.reduce((sum, year) => sum + triangle_data[year][devYear], 0);
@@ -127,16 +148,11 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
 
     const grandTotal = Object.values(rowTotals).reduce((a, b) => a + b, 0);
 
-    // Función para generar el color del Heatmap basado en el monto
     const getHeatmapColor = (value) => {
-        if (value === 0) return '#ffeaea'; // Rojo pálido para vacíos
-        if (value === 0) return 'white';
-
+        if (value === 0) return '#ffeaea';
         const maxVal = Math.max(...Object.values(triangle_data).flatMap(row => Object.values(row)));
         if (maxVal === 0) return 'white';
-
         const intensity = Math.min(value / maxVal, 1);
-        // Escala de azules: blanco (bajo) -> azul claro -> azul fuerte (alto)
         return `rgba(52, 152, 219, ${intensity * 0.8})`;
     };
 
@@ -145,42 +161,39 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
         return `rgba(46, 204, 113, ${Math.min(value / (grandTotal / (years.length || 1)), 0.4)})`;
     };
 
-    // Preparar datos para la curva de desarrollo acumulado
     const prepareDevelopmentCurve = (ibnrResults) => {
         if (years.length === 0) return [];
-
         const curveData = [];
-        const latestYear = years[years.length - 1];
-
         devYears.forEach((devYear, idx) => {
             const accumulated = years.reduce((sum, year) => {
                 return sum + (triangle_data[year][devYear] || 0);
             }, 0);
-
-            // Proyectar el valor ultimate para el último punto
             let projectedValue = null;
             if (idx === devYears.length - 1 && ibnrResults) {
                 projectedValue = ibnrResults.ultimate_losses;
             }
-
             curveData.push({
                 developmentYear: `Año ${devYear}`,
                 actual: accumulated,
                 projected: projectedValue,
             });
         });
-
         return curveData;
     };
 
-    // Generar LDFs sugeridos basados en los datos actuales para los inputs
     const suggestedLdfs = [];
-
     if (devYears.length > 1) {
         for (let i = 0; i < devYears.length - 1; i++) {
-            const colCurrent = colTotals[devYears[i]];
-            const colNext = colTotals[devYears[i+1]];
-            suggestedLdfs.push(colNext / colCurrent || 1.0);
+            const currentDevYear = devYears[i];
+            const nextDevYear = devYears[i+1];
+            let sumCurrent = 0;
+            let sumNext = 0;
+            const yearsToSum = years.slice(0, years.length - (i + 1));
+            yearsToSum.forEach(year => {
+                sumCurrent += triangle_data[year][currentDevYear] || 0;
+                sumNext += triangle_data[year][nextDevYear] || 0;
+            });
+            suggestedLdfs.push(sumNext / sumCurrent || 1.0);
         }
     }
 
@@ -284,7 +297,8 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                                     Año {devYear}
                                 </th>
                             ))}
-                            <th style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#e9ecef', color: '#2c3e50' }}>Total Fila / Ultimate</th>
+                            <th style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#e9ecef', color: '#2c3e50' }}>Total Fila</th>
+                            <th style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#d1f2eb', color: '#16a085' }}>IBNR</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -319,6 +333,15 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                                         minimumFractionDigits: 2,
                                         maximumFractionDigits: 2
                                     })}
+                                </td>
+                                <td style={{
+                                    border: '1px solid #ddd',
+                                    padding: '10px',
+                                    textAlign: 'right',
+                                    color: '#7f8c8d',
+                                    backgroundColor: '#fbfbfb'
+                                }}>
+                                    -
                                 </td>
                             </tr>
                         ))}
@@ -366,24 +389,37 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                                     maximumFractionDigits: 2
                                 })}
                             </td>
+                            <td style={{
+                                border: '1px solid #ddd',
+                                padding: '10px',
+                                textAlign: 'right',
+                                backgroundColor: '#d1f2eb',
+                                color: '#16a085',
+                                fontWeight: 'bold'
+                            }}>
+                                {ibnrResults ? ibnrResults.ibnr_estimate.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                            </td>
                         </tr>
                         {ibnrResults && ibnrResults.projected_triangle && (
                             <>
-                                <tr>
-                                    <td colSpan={devYears.length + 2} style={{
+                                <tr style={{ backgroundColor: '#e8f4fd' }}>
+                                    <td colSpan={devYears.length + 3} style={{
                                         border: '1px solid #ddd',
                                         padding: '15px',
                                         textAlign: 'center',
                                         fontWeight: 'bold',
-                                        backgroundColor: '#f8f9fa',
                                         color: '#2c3e50',
                                         fontSize: '14px'
                                     }}>
-                                        Cálculo de IBNR basándose en el Triángulo Proyectado (Ultimate Values)
+                                        Triángulo Proyectado (Valores Ultimate)
                                     </td>
                                 </tr>
                                 {years.map(year => {
                                     const projectedRow = ibnrResults.projected_triangle[year];
+                                    const ultimateVal = projectedRow?.[devYears.length] || 0;
+                                    const currentVal = rowTotals[year] || 0;
+                                    const ibnrPerYear = ultimateVal - currentVal;
+
                                     return (
                                         <tr key={`proj-${year}`} style={{ backgroundColor: '#f0fff4' }}>
                                             <td style={{ border: '1px solid #ddd', padding: '10px', fontWeight: 'bold', backgroundColor: '#fbfbfb', textAlign: 'left' }}>{year} (Proj)</td>
@@ -411,7 +447,20 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                                                 backgroundColor: '#e6ffed',
                                                 color: '#27ae60'
                                             }}>
-                                                {(projectedRow?.[devYears.length] || 0).toLocaleString(undefined, {
+                                                {ultimateVal.toLocaleString(undefined, {
+                                                    minimumFractionDigits: 2,
+                                                    maximumFractionDigits: 2
+                                                })}
+                                            </td>
+                                            <td style={{
+                                                border: '1px solid #ddd',
+                                                padding: '10px',
+                                                textAlign: 'right',
+                                                fontWeight: 'bold',
+                                                backgroundColor: '#d1f2eb',
+                                                color: '#16a085'
+                                            }}>
+                                                {ibnrPerYear.toLocaleString(undefined, {
                                                     minimumFractionDigits: 2,
                                                     maximumFractionDigits: 2
                                                 })}
