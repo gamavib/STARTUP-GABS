@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import ReactECharts from 'echarts-for-react';
+import * as echarts from 'echarts';
 
 const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange }) => {
     const [triangleData, setTriangleData] = useState(initialTriangleData);
@@ -161,8 +162,9 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
         return `rgba(46, 204, 113, ${Math.min(value / (grandTotal / (years.length || 1)), 0.4)})`;
     };
 
-    const prepareDevelopmentCurve = (ibnrResults) => {
-        if (years.length === 0) return [];
+    const prepareEChartsOption = (ibnrResults) => {
+        if (years.length === 0) return {};
+
         const curveData = [];
         devYears.forEach((devYear, idx) => {
             const accumulated = years.reduce((sum, year) => {
@@ -178,7 +180,67 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
                 projected: projectedValue,
             });
         });
-        return curveData;
+
+        return {
+            title: {
+                text: 'Curva de Desarrollo Acumulado',
+                left: 'center',
+                textStyle: { color: '#2c3e50', fontSize: 18 }
+            },
+            tooltip: {
+                trigger: 'axis',
+                formatter: (params) => {
+                    let res = `<b>${params[0].name}</b><br/>`;
+                    params.forEach(p => {
+                        res += `${p.marker} ${p.seriesName}: $${p.value?.toLocaleString()}<br/>`;
+                    });
+                    return res;
+                }
+            },
+            legend: {
+                bottom: 0,
+                data: ['Siniestros Acumulados (Real)', 'Proyección Ultimate (Actuarial)']
+            },
+            grid: {
+                top: '15%',
+                left: '3%',
+                right: '4%',
+                bottom: '10%',
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                data: curveData.map(d => d.developmentYear),
+                axisLine: { lineStyle: { color: '#7f8c8d' } }
+            },
+            yAxis: {
+                type: 'value',
+                axisLine: { show: true, lineStyle: { color: '#7f8c8d' } },
+                axisLabel: { formatter: (value) => `$${value.toLocaleString()}` }
+            },
+            series: [
+                {
+                    name: 'Siniestros Acumulados (Real)',
+                    type: 'line',
+                    data: curveData.map(d => d.actual),
+                    smooth: true,
+                    symbolSize: 8,
+                    itemStyle: { color: '#3498db' },
+                    lineStyle: { width: 3 },
+                    emphasis: { focus: 'series' }
+                },
+                {
+                    name: 'Proyección Ultimate (Actuarial)',
+                    type: 'line',
+                    data: curveData.map(d => d.projected),
+                    smooth: true,
+                    symbolSize: 8,
+                    lineStyle: { width: 3, type: 'dashed' },
+                    itemStyle: { color: '#2ecc71' },
+                    emphasis: { focus: 'series' }
+                }
+            ]
+        };
     };
 
     const suggestedLdfs = [];
@@ -480,37 +542,11 @@ const TriangleViewer = ({ initialTriangleData, initialRamo, token, onRamoChange 
             </div>
 
             <div style={{ marginTop: '40px', padding: '20px', backgroundColor: '#f8f9fa', borderRadius: '12px', border: '1px solid #ddd' }}>
-                <h3 style={{ color: '#2c3e50', fontSize: '18px', marginBottom: '20px', textAlign: 'center' }}>Curva de Desarrollo Acumulado</h3>
                 <div style={{ width: '100%', height: '400px' }}>
-                    <ResponsiveContainer>
-                        <LineChart data={prepareDevelopmentCurve(ibnrResults)}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="developmentYear" />
-                            <YAxis />
-                            <Tooltip formatter={(value) => `$${value?.toLocaleString()}`} />
-                            <Legend />
-                            <Line
-                                type="monotone"
-                                dataKey="actual"
-                                stroke="#3498db"
-                                strokeWidth={3}
-                                dot={{ r: 6 }}
-                                activeDot={{ r: 8 }}
-                                name="Siniestros Acumulados (Real)"
-                            />
-                            {ibnrResults && (
-                                <Line
-                                    type="monotone"
-                                    dataKey="projected"
-                                    stroke="#2ecc71"
-                                    strokeWidth={3}
-                                    strokeDasharray="5 5"
-                                    dot={{ r: 6 }}
-                                    name="Proyección Ultimate (Actuarial)"
-                                />
-                            )}
-                        </LineChart>
-                    </ResponsiveContainer>
+                    <ReactECharts
+                        option={prepareEChartsOption(ibnrResults)}
+                        style={{ height: '400px', width: '100%' }}
+                    />
                 </div>
             </div>
         </div>

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
 import datetime
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
@@ -6,9 +6,9 @@ import io
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from app.database import SessionLocal, Company, Claim, User, AuditLog, init_db
+from app.database import SessionLocal, Company, Claim, User, AuditLog, init_db, set_company_session
 from app.modules.diagnostics.validator import validate_insurance_csv
-from app.modules.actuarial.engine import ActuarialEngine
+from app.worker import celery_app, process_csv_upload, run_actuarial_analysis
 from app.auth import (
     get_db, get_current_user, create_access_token,
     verify_password, get_password_hash, OAuth2PasswordRequestForm
@@ -18,6 +18,36 @@ from app.schemas import CompanySetup
 
 
 app = FastAPI(title="B2B Insurance SaaS - Actuarial Core")
+
+# --- WebSocket Manager ---
+class ConnectionManager:
+    def __init__(self):
+        # Mapeo de company_id -> lista de websockets activos
+        self.active_connections: Dict[int, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, company_id: int):
+        await websocket.accept()
+        if company_id not in self.active_connections:
+            self.active_connections[company_id] = []
+        self.active_connections[company_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, company_id: int):
+        if company_id in self.active_connections:
+            self.active_connections[company_id].remove(websocket)
+            if not self.active_connections[company_id]:
+                del self.active_connections[company_id]
+
+    async def send_notification(self, company_id: int, message: Dict[str, Any]):
+        if company_id in self.active_connections:
+            for connection in self.active_connections[company_id]:
+                try:
+                    await connection.send_json(message)
+                except Exception:
+                    # Limpiar conexiones muertas
+                    pass
+
+manager = ConnectionManager()
+# ---------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +64,46 @@ def log_action(db: Session, user: User, action: str, details: str):
     db.add(audit)
     db.commit()
 
+from celery.result import AsyncResult
+
+@app.post("/internal/notify")
+async def internal_notify(payload: dict):
+    """
+    Endpoint interno utilizado por los workers de Celery para disparar
+    notificaciones WebSocket a los usuarios conectados.
+    """
+    company_id = payload.get("company_id")
+    message = payload.get("message")
+    task_id = payload.get("task_id")
+
+    if company_id:
+        await manager.send_notification(company_id, {
+            "type": "TASK_COMPLETED",
+            "task_id": task_id,
+            "message": message
+        })
+    return {"status": "notified"}
+
+@app.websocket("/ws/{company_id}")
+async def websocket_endpoint(websocket: WebSocket, company_id: int):
+    await manager.connect(websocket, company_id)
+    try:
+        while True:
+            # Mantener conexión viva
+            await websocket.receive_text()
+    except WebSocketDisconnect():
+        manager.disconnect(websocket, company_id)
+
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    task_result = AsyncResult(task_id, app=celery_app)
+    result = {
+        "task_id": task_id,
+        "status": task_result.status,
+        "result": task_result.result if task_result.ready() else None
+    }
+    return result
+
 @app.post("/token")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == form_data.username).first()
@@ -42,6 +112,33 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 
     access_token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id}
+
+# --- Middleware para Inyectar Company ID en la Sesión de DB ---
+@app.middleware("http")
+async def rls_session_middleware(request, call_next):
+    # Solo aplicamos RLS a rutas que requieren autenticación
+    # Buscamos el token en los headers
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            # Nota: En un entorno real, decodificaríamos el JWT aquí para obtener el company_id.
+            # Para esta implementación, utilizaremos la dependencia get_current_user en los endpoints,
+            # pero para el middleware necesitamos una forma de obtener el company_id rápidamente.
+            # Implementaremos una lógica de recuperación simplificada basada en el token.
+            from app.auth import decode_access_token
+            payload = decode_access_token(auth_header.split(" ")[1])
+            if payload and "company_id" in payload:
+                # Usamos la sesión local para inyectar el ID en Postgres
+                db = SessionLocal()
+                try:
+                    set_company_session(db, payload["company_id"])
+                finally:
+                    db.close()
+        except Exception:
+            pass # Si falla la decodificación, la query fallará normalmente por falta de permisos
+
+    response = await call_next(request)
+    return response
 
 @app.post("/debug/test")
 async def debug_test(data: dict):
@@ -93,63 +190,23 @@ async def upload_csv(
 
     contents = await file.read()
 
-    # Robust encoding detection
     try:
         decoded_content = contents.decode('utf-8')
     except UnicodeDecodeError:
         decoded_content = contents.decode('latin-1')
 
-    # Detect separator (comma or semicolon)
-    # Read first line to check for separators
-    first_line = decoded_content.splitlines()[0] if decoded_content else ""
-    separator = ';' if ';' in first_line and (',' not in first_line or first_line.count(';') > first_line.count(',')) else ','
+    # Disparar tarea asíncrona en lugar de procesar aquí
+    task = process_csv_upload.delay({
+        "company_id": current_user.company_id,
+        "user_id": current_user.id,
+        "csv_data": decoded_content
+    })
 
-    print(f"DEBUG CSV: Detected separator: '{separator}'")
-
-    df = pd.read_csv(io.StringIO(decoded_content), sep=separator)
-
-    # Clean column names (remove leading/trailing spaces)
-    df.columns = [col.strip() for col in df.columns]
-    print(f"DEBUG CSV: Columns found: {df.columns.tolist()}")
-
-    # Ensure numeric types to avoid 'str' vs 'int' comparisons
-    for col in ['monto_pagado', 'monto_reserva']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0.0)
-
-    validation = validate_insurance_csv(df)
-
-    if not validation.is_valid:
-        print(f"DEBUG CSV: Validation failed: {validation.errors}")
-        return {"status": "error", "errors": validation.errors}
-
-    company_id = current_user.company_id
-
-    # Clear previous data for this company
-    db.query(Claim).filter(Claim.company_id == company_id).delete()
-
-    inserted_count = 0
-    for _, row in df.iterrows():
-        try:
-            claim = Claim(
-                company_id=company_id,
-                external_id=str(row['id_siniestro']),
-                occurrence_date=pd.to_datetime(row['fecha_ocurrencia'], dayfirst=True).date(),
-                report_date=pd.to_datetime(row['fecha_reporte'], dayfirst=True).date(),
-                amount_paid=float(row['monto_pagado']),
-                amount_reserve=float(row['monto_reserva']),
-                ramo=str(row['ramo']),
-                policy_id=str(row['id_poliza'])
-            )
-            db.add(claim)
-            inserted_count += 1
-        except Exception as e:
-            print(f"DEBUG CSV: Error inserting row {row.get('id_siniestro', 'unknown')}: {str(e)}")
-
-    db.commit()
-    print(f"DEBUG CSV: Successfully inserted {inserted_count} out of {len(df)} rows for company {company_id}")
-    log_action(db, current_user, "UPLOAD_CSV", f"Carga de {inserted_count} siniestros")
-    return {"status": "success", "message": f"Datos cargados: {inserted_count} siniestros insertados para la compañía {company_id}"}
+    return {
+        "status": "accepted",
+        "message": "El archivo ha sido recibido y se está procesando en segundo plano.",
+        "task_id": task.id
+    }
 
 def get_df_from_db(db: Session, company_id: int):
     claims = db.query(Claim).filter(Claim.company_id == company_id).all()

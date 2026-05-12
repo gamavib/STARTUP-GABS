@@ -1,15 +1,69 @@
 import React, { useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import ReactECharts from 'echarts-for-react';
+import * as echarts from 'echarts';
 
 const ActuarialDashboard = ({ data, projectionData, contractDraft, onDownloadContract }) => {
     if (!data) return <div style={{textAlign: 'center', padding: '20px'}}>Cargue un archivo CSV para ver el análisis actuarial.</div>;
 
     const { ibnr, comparison, metrics, ramo } = data;
 
-    const reserveData = [
-        { name: 'Contable', value: comparison.reserva_contable },
-        { name: 'Técnica (Actuarial)', value: comparison.reserva_tecnica_actuarial },
-    ];
+    const prepareReserveChartOption = () => {
+        const reserveData = [
+            { name: 'Contable', value: comparison.reserva_contable },
+            { name: 'Técnica (Actuarial)', value: comparison.reserva_tecnica_actuarial },
+        ];
+
+        return {
+            title: {
+                text: 'Comparativa de Reservas',
+                left: 'center',
+                textStyle: { color: '#2c3e50', fontSize: 16 }
+            },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: (params) => {
+                    const p = params[0];
+                    return `${p.name}<br/><b>${p.marker} ${p.seriesName}: $${p.value?.toLocaleString()}</b>`;
+                }
+            },
+            grid: {
+                top: '20%',
+                bottom: '10%',
+                left: '10%',
+                right: '10%',
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                data: reserveData.map(d => d.name),
+                axisLine: { lineStyle: { color: '#7f8c8d' } }
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: { formatter: (value) => `$${value.toLocaleString()}` },
+                axisLine: { show: true, lineStyle: { color: '#7f8c8d' } }
+            },
+            series: [
+                {
+                    name: 'Monto Reserva',
+                    type: 'bar',
+                    data: reserveData.map(d => d.value),
+                    barWidth: '40%',
+                    itemStyle: {
+                        color: (params) => params.dataIndex === 0 ? '#3498db' : '#2ecc71'
+                    },
+                    label: {
+                        show: true,
+                        position: 'top',
+                        formatter: (params) => `$${params.value?.toLocaleString()}`,
+                        color: '#2c3e50',
+                        fontWeight: 'bold'
+                    }
+                }
+            ]
+        };
+    };
 
     return (
         <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
@@ -37,18 +91,11 @@ const ActuarialDashboard = ({ data, projectionData, contractDraft, onDownloadCon
             </div>
 
             <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', marginBottom: '30px' }}>
-                <h3 style={{marginTop: 0}}>Comparativa de Reservas</h3>
                 <div style={{ width: '100%', height: 300 }}>
-                    <ResponsiveContainer>
-                        <BarChart data={reserveData}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="name" />
-                            <YAxis />
-                            <Tooltip />
-                            <Legend />
-                            <Bar dataKey="value" fill="#3498db" />
-                        </BarChart>
-                    </ResponsiveContainer>
+                    <ReactECharts
+                        option={prepareReserveChartOption()}
+                        style={{ height: '300px', width: '100%' }}
+                    />
                 </div>
             </div>
 

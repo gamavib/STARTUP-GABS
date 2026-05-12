@@ -1,0 +1,102 @@
+import os
+from celery import Celery
+from app.database import SessionLocal, Claim, AuditLog
+
+# Configuración de Celery basada en variables de entorno definidas en docker-compose
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
+
+celery_app = Celery(
+    "insurance_saas_worker",
+    broker=CELERY_BROKER_URL,
+    backend=CELERY_RESULT_BACKEND
+)
+
+# Configuración optimizada para procesamiento actuarial (CPU intensive)
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+    # Evitar que un solo cálculo masivo bloquee el worker
+    worker_prefetch_multiplier=1,
+)
+
+@celery_app.task(bind=True)
+def process_csv_upload(self, data_payload: dict):
+    """
+    Tarea asíncrona para procesar la carga de siniestros.
+    data_payload contiene: { 'company_id': int, 'user_id': int, 'csv_data': str }
+    """
+    company_id = data_payload.get('company_id')
+    user_id = data_payload.get('user_id')
+    decoded_content = data_payload.get('csv_data')
+
+    import pandas as pd
+    import io
+    from app.modules.diagnostics.validator import validate_insurance_csv
+
+    db = SessionLocal()
+    try:
+        # 1. Detectar separador y cargar DF
+        first_line = decoded_content.splitlines()[0] if decoded_content else ""
+        separator = ';' if ';' in first_line and (',' not in first_line or first_line.count(';') > first_line.count(',')) else ','
+
+        df = pd.read_csv(io.StringIO(decoded_content), sep=separator)
+        df.columns = [col.strip() for col in df.columns]
+
+        for col in ['monto_pagado', 'monto_reserva']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0.0)
+
+        # 2. Validación Actuarial
+        validation = validate_insurance_csv(df)
+        if not validation.is_valid:
+            return {"status": "error", "errors": validation.errors}
+
+        # 3. Limpieza de datos previos (Multi-tenant)
+        db.query(Claim).filter(Claim.company_id == company_id).delete()
+
+        # 4. Inserción masiva
+        inserted_count = 0
+        for _, row in df.iterrows():
+            try:
+                claim = Claim(
+                    company_id=company_id,
+                    external_id=str(row['id_siniestro']),
+                    occurrence_date=pd.to_datetime(row['fecha_ocurrencia'], dayfirst=True).date(),
+                    report_date=pd.to_datetime(row['fecha_reporte'], dayfirst=True).date(),
+                    amount_paid=float(row['monto_pagado']),
+                    amount_reserve=float(row['monto_reserva']),
+                    ramo=str(row['ramo']),
+                    policy_id=str(row['id_poliza'])
+                )
+                db.add(claim)
+                inserted_count += 1
+            except Exception:
+                continue
+
+        db.commit()
+
+        # 5. Log de auditoría
+        audit = AuditLog(
+            company_id=company_id,
+            user_id=user_id,
+            action="UPLOAD_CSV_ASYNC",
+            details=f"Carga asíncrona de {inserted_count} siniestros"
+        )
+        db.add(audit)
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Procesados {inserted_count} siniestros para compañía {company_id}",
+            "count": inserted_count
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()

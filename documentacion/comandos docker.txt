@@ -34,6 +34,12 @@ docker restart insurance_saas_frontend
 admin@aseguradora.com
 password123
 
-
+  Credenciales que voy a configurar:                                                                                         
+  - Email: admin@saasactuarial.com                                                                                           
+  - Password: admin1234 (Puedes cambiarla después en el sistema) 
 
   curl -v -X POST "http://localhost:8000/token" \ -H "Content-Type: application/x-www-form-urlencoded" \ -d "username=admin@miempresa.com&password=PasswordSeguro123" 
+docker exec -it insurance_saas_db psql -U postgres -d insurance_saas
+
+
+

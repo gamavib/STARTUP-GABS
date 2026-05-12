@@ -4,12 +4,13 @@
 La plataforma es una solución de software como servicio (SaaS) diseñada para compañías de seguros. Su objetivo es transformar datos brutos de siniestralidad en estrategias de transferencia de riesgo optimizadas, utilizando ciencia actuarial avanzada, modelos de capital económico y una arquitectura multi-tenant segura.
 
 ## 2. Stack Tecnológico
-- **Frontend**: React.js + Recharts (Visualización de datos, Dashboards interactivos, Heatmaps de volatilidad y Gráficos de desarrollo Real vs. Proyectado).
+- **Frontend**: Next.js 14 (App Router) + Apache ECharts (Visualización de alta performance, Dashboards interactivos, Heatmaps de volatilidad y Gráficos de desarrollo Real vs. Proyectado).
+- **Gestión de Estado**: TanStack Query (React Query) para caché inteligente y sincronización asíncrona.
 - **Backend**: FastAPI (Python 3.12) - Alta performance y soporte nativo de tipado.
-- **Motor Actuarial**: Implementación nativa en Pandas + NumPy con modelos de proyección estables y optimización de capital.
-- **Persistencia**: PostgreSQL 15 (Aislamiento de clientes y gestión de primas/contratos).
-- **Seguridad**: JWT + Passlib/Bcrypt.
-- **Infraestructura**: Docker + Docker Compose + Nginx.
+- **Motor Actuarial**: Implementación optimizada en Polars + NumPy con modelos de proyección estables y optimización de capital.
+- **Persistencia**: PostgreSQL 15 (Aislamiento de clientes mediante Row Level Security - RLS).
+- **Seguridad**: JWT + Passlib/Bcrypt + Middleware de Servidor (Cookies).
+- **Infraestructura**: Kubernetes (K8s) con Horizontal Pod Autoscaling (HPA) para Workers de Celery.
 
 ## 3. Arquitectura de Módulos (Core)
 
@@ -19,7 +20,7 @@ La plataforma es una solución de software como servicio (SaaS) diseñada para c
 - **Valor**: Asegura la integridad de los datos antes del procesamiento actuarial.
 
 ### B. Módulo Actuarial (Enterprise Engine)
-- **Triángulos de Siniestralidad**: Construcción de matrices de Origen vs. Desarrollo optimizadas mediante agregaciones SQL.
+- **Triángulos de Siniestralidad**: Construcción de matrices de Origen vs. Desarrollo optimizadas mediante agregaciones SQL y procesadas con Polars.
 - **Cálculo de IBNR Avanzado**: 
     - **S-Smoothing**: Implementación de promedio ponderado de LDFs para reducir la volatilidad causada por años atípicos.
     - **Lógica de Proyección**: Implementación de proyección paso a paso (Celdas $j = \text{Celda } j-1 \times \text{LDF}_{j-1}$), asegurando coherencia matemática en el triángulo proyectado.
@@ -42,13 +43,15 @@ La plataforma es una solución de software como servicio (SaaS) diseñada para c
 - **Generación de Borradores**: Traducción de resultados técnicos en cláusulas contractuales (Prioridad, Límite, Cuotas).
 
 ## 4. Diseño de Seguridad y SaaS (Multi-tenancy)
-- **Aislamiento de Datos**: Implementación de `company_id` en todas las tablas.
+- **Aislamiento de Datos**: Implementación de `company_id` en todas las tablas reforzado con **Row Level Security (RLS)** a nivel de base de datos.
 - **Filtrado de Consultas**: Todas las solicitudes son filtradas por el `company_id` extraído del token JWT.
+- **Protección de Rutas**: Middleware de servidor en Next.js que valida la sesión mediante cookies antes de renderizar cualquier página protegida.
 
 ## 5. Diagrama de Flujo de Datos
-`CSV Input` $\rightarrow$ `Gobernanza` $\rightarrow$ `DB PostgreSQL` $\rightarrow$ `S-Smoothed Actuarial Engine` $\rightarrow$ `TCR Optimization` $\rightarrow$ `Burn-through Analysis` $\rightarrow$ `Renewal Package` $\rightarrow$ `Executive Dashboard`
+`CSV Input` $\rightarrow$ `Gobernanza` $\rightarrow$ `DB PostgreSQL` $\rightarrow$ `Polars Actuarial Engine` $\rightarrow$ `TCR Optimization` $\rightarrow$ `Burn-through Analysis` $\rightarrow$ `Renewal Package` $\rightarrow$ `Executive Dashboard (Next.js)`
 
 ## 6. Estrategia de Despliegue
-- **Contenerización**: Docker Multi-stage build.
-- **CI/CD**: Automatización vía GitHub Actions $\rightarrow$ Docker Hub $\rightarrow$ SSH Deploy.
-- **Red**: Nginx como Reverse Proxy manejando HTTPS.
+- **Contenerización**: Docker Multi-stage build optimizado para Node 20 y Python 3.12.
+- **Orquestación**: Cluster de Kubernetes (K8s) con despliegues independientes para Frontend, Backend y Workers.
+- **Escalabilidad**: Horizontal Pod Autoscaler (HPA) configurado para los Workers de Celery basado en el uso de CPU.
+- **Red**: Ingress Controller (NGINX) manejando el tráfico HTTPS y balanceo de carga.

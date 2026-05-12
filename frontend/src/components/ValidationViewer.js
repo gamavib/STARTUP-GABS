@@ -1,5 +1,6 @@
 import React from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
+import ReactECharts from 'echarts-for-react';
+import * as echarts from 'echarts';
 
 const ValidationViewer = ({ data, loading }) => {
     if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#3498db' }}>Cargando validaciones...</div>;
@@ -25,6 +26,109 @@ const ValidationViewer = ({ data, loading }) => {
     const avgError = series.reduce((acc, curr) => acc + Math.abs(curr.error), 0) / series.length;
     const globalRatio = series.reduce((acc, curr) => acc + curr.ratio, 0) / series.length;
 
+    const prepareErrorLineOption = () => {
+        return {
+            title: {
+                text: 'Evolución del Error de Reserva',
+                left: 'center',
+                textStyle: { color: '#2c3e50', fontSize: 16 }
+            },
+            tooltip: {
+                trigger: 'axis',
+                formatter: (params) => {
+                    const p = params[0];
+                    return `Año ${p.name}<br/><b style="color:#3498db">Error: $${p.value?.toLocaleString()}</b>`;
+                }
+            },
+            grid: {
+                top: '20%',
+                bottom: '10%',
+                left: '10%',
+                right: '5%',
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                data: series.map(d => d.year),
+                axisLine: { lineStyle: { color: '#7f8c8d' } }
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: { formatter: (value) => `$${value.toLocaleString()}` },
+                axisLine: { show: true, lineStyle: { color: '#7f8c8d' } }
+            },
+            series: [
+                {
+                    name: 'Error',
+                    type: 'line',
+                    data: series.map(d => d.error),
+                    smooth: true,
+                    symbolSize: 8,
+                    itemStyle: { color: '#3498db' },
+                    lineStyle: { width: 3 },
+                    emphasis: { focus: 'series' }
+                }
+            ]
+        };
+    };
+
+    const prepareComparisonBarOption = () => {
+        return {
+            title: {
+                text: 'Estimado vs Real por Año',
+                left: 'center',
+                textStyle: { color: '#2c3e50', fontSize: 16 }
+            },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: (params) => {
+                    let res = `Año ${params[0].name}<br/>`;
+                    params.forEach(p => {
+                        res += `${p.marker} ${p.seriesName}: <b>$${p.value?.toLocaleString()}</b><br/>`;
+                    });
+                    return res;
+                }
+            },
+            legend: {
+                bottom: 0,
+                data: ['Estimado', 'Real']
+            },
+            grid: {
+                top: '20%',
+                bottom: '10%',
+                left: '10%',
+                right: '5%',
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                data: series.map(d => d.year),
+                axisLine: { lineStyle: { color: '#7f8c8d' } }
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: { formatter: (value) => `$${value.toLocaleString()}` },
+                axisLine: { show: true, lineStyle: { color: '#7f8c8d' } }
+            },
+            series: [
+                {
+                    name: 'Estimado',
+                    type: 'bar',
+                    data: series.map(d => d.estimated),
+                    itemStyle: { color: '#3498db' },
+                    emphasis: { focus: 'series' }
+                },
+                {
+                    name: 'Real',
+                    type: 'bar',
+                    data: series.map(d => d.actual),
+                    itemStyle: { color: '#2ecc71' },
+                    emphasis: { focus: 'series' }
+                }
+            ]
+        };
+    };
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
             {/* KPI Cards */}

@@ -1,5 +1,6 @@
 import React from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import ReactECharts from 'echarts-for-react';
+import * as echarts from 'echarts';
 
 const BacktestingViewer = ({ data }) => {
     // Defensive check: Ensure data is an array and not empty
@@ -31,6 +32,73 @@ const BacktestingViewer = ({ data }) => {
         console.error("Error calculating backtesting metrics:", e);
     }
 
+    const prepareBacktestingChartOption = () => {
+        const years = data.map(d => d.year || 'N/A');
+
+        return {
+            title: {
+                text: 'Análisis de Error por Año',
+                left: 'center',
+                textStyle: { color: '#2c3e50', fontSize: 16 }
+            },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: (params) => {
+                    let res = `<b style="color:#2c3e50">${params[0].name}</b><br/>`;
+                    params.forEach(p => {
+                        res += `${p.marker} ${p.seriesName}: <b>$${p.value?.toLocaleString()}</b><br/>`;
+                    });
+                    return res;
+                }
+            },
+            legend: {
+                bottom: 0,
+                data: ['Reserva Estimada', 'Pago Real', 'Error de Predicción']
+            },
+            grid: {
+                top: '15%',
+                bottom: '10%',
+                left: '5%',
+                right: '5%',
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                data: years,
+                axisLine: { lineStyle: { color: '#7f8c8d' } }
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: { formatter: (value) => `$${value.toLocaleString()}` },
+                axisLine: { show: true, lineStyle: { color: '#7f8c8d' } }
+            },
+            series: [
+                {
+                    name: 'Reserva Estimada',
+                    type: 'bar',
+                    data: data.map(d => d.estimated),
+                    itemStyle: { color: '#3498db' },
+                    emphasis: { focus: 'series' }
+                },
+                {
+                    name: 'Pago Real',
+                    type: 'bar',
+                    data: data.map(d => d.actual),
+                    itemStyle: { color: '#2ecc71' },
+                    emphasis: { focus: 'series' }
+                },
+                {
+                    name: 'Error de Predicción',
+                    type: 'bar',
+                    data: data.map(d => d.error),
+                    itemStyle: { color: '#e74c3c' },
+                    emphasis: { focus: 'series' }
+                }
+            ]
+        };
+    };
+
     return (
         <div style={{
             backgroundColor: 'white',
@@ -60,20 +128,11 @@ const BacktestingViewer = ({ data }) => {
             </div>
 
             <div style={{ marginBottom: '40px' }}>
-                <h3 style={{ color: '#2c3e50', fontSize: '18px', marginBottom: '15px' }}>Análisis de Error por Año</h3>
                 <div style={{ width: '100%', height: 400 }}>
-                    <ResponsiveContainer>
-                        <BarChart data={data}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="year" label={{ value: 'Año de Snapshot', position: 'insideBottom', offset: -5 }} />
-                            <YAxis />
-                            <Tooltip formatter={(value) => `$${value?.toLocaleString()}`} />
-                            <Legend />
-                            <Bar dataKey="error" fill="#e74c3c" name="Error de Predicción" />
-                            <Bar dataKey="estimated" fill="#3498db" name="Reserva Estimada" />
-                            <Bar dataKey="actual" fill="#2ecc71" name="Pago Real" />
-                        </BarChart>
-                    </ResponsiveContainer>
+                    <ReactECharts
+                        option={prepareBacktestingChartOption()}
+                        style={{ height: '400px', width: '100%' }}
+                    />
                 </div>
             </div>
 

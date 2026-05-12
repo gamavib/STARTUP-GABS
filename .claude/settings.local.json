@@ -15,7 +15,9 @@
       "Bash(docker compose up:*)",
       "Bash(docker compose ps:*)",
       "Bash(npm install:*)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(python3 -m pytest tests/test_actuarial_regression.py)",
+      "Bash(python3 tests/test_actuarial_regression.py)"
     ]
   }
 }

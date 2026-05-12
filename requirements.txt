@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 pandas
+polars
 chainladder
 sqlalchemy
 psycopg2-binary
@@ -10,3 +11,6 @@ bcrypt==4.0.1
 numpy
 python-multipart
 pydantic[email]
+celery
+redis
+requests

@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import polars as pl
 import datetime
 from typing import Dict, Any, List
 
@@ -9,74 +10,99 @@ class ActuarialEngine:
         The engine accepts a DataFrame. It can be either raw claim data
         or summarized data (origin_year, dev_year, total).
         """
-        self.raw_df = df.copy()
+        # internalize as a Polars DataFrame for all processing.
+        # We keep the original df only to detect if it is summarized.
+        self.pl_df = pl.from_pandas(df)
 
         # Determine if the provided df is already summarized or raw
-        # Summarized df typically has ['origin_year', 'dev_year', 'total']
         self.is_summarized = all(col in df.columns for col in ['origin_year', 'dev_year', 'total']) and \
                              len(df.columns) <= 5 # Roughly
 
         if self.is_summarized:
-            self.summarized_df = self.raw_df
+            self.summarized_pl = self.pl_df
         else:
-            # If raw, we provide a helper to summarize it when needed for the triangle
-            self.summarized_df = None
+            self.summarized_pl = None
 
     def get_summarized_data(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
         """
         Returns the summarized version of the data.
-        If the engine was initialized with raw data, it performs the aggregation here.
+        Uses Polars for high-performance aggregation.
         """
         if self.is_summarized:
-            return self.raw_df
+            return self.raw_pd
 
-        # Perform aggregation from raw data
-        df = self.raw_df.copy()
+        df = self.pl_df
+
         if ramo and 'ramo' in df.columns:
-            df = df[df['ramo'] == ramo]
+            df = df.filter(pl.col('ramo') == ramo)
 
-        # Calculate origin_year and dev_year from dates if not present
+        # Calculate origin_year and dev_year
+        # Note: Polars handles dates differently. We assume the input columns are strings or dates.
         if 'origin_year' not in df.columns:
-            # Ensure dates are parsed correctly (dayfirst=True for DD/MM/YYYY)
-            df['occurrence_date_dt'] = pd.to_datetime(df['fecha_ocurrencia'], dayfirst=True, errors='coerce')
-            df['report_date_dt'] = pd.to_datetime(df['fecha_reporte'], dayfirst=True, errors='coerce')
+            df = df.with_columns([
+                pl.col('fecha_ocurrencia').str.to_date(format='%d/%m/%Y', strict=False).dt.year().alias('origin_year'),
+                (pl.col('fecha_reporte').str.to_date(format='%d/%m/%Y', strict=False).dt.year() -
+                 pl.col('fecha_ocurrencia').str.to_date(format='%d/%m/%Y', strict=False).dt.year()).alias('dev_year')
+            ])
 
-            df['origin_year'] = df['occurrence_date_dt'].dt.year
-            df['dev_year'] = df['report_date_dt'].dt.year - df['occurrence_date_dt'].dt.year
-
-            # Drop helper columns
-            df = df.drop(columns=['occurrence_date_dt', 'report_date_dt'])
-
-        # This is a simplified aggregation logic that should match the DB's logic
-        # Assuming raw data has 'origin_year', 'dev_year' and the metric column
         metric_col = 'monto_pagado' if metric == 'paid' else 'monto_reserva' if metric == 'reserve' else 'total'
 
-        if metric_col not in df.columns:
-            # Fallback or error
-            return pd.DataFrame(columns=['origin_year', 'dev_year', 'total'])
+        # Handle 'total' metric as sum of paid + reserve
+        if metric_col == 'total':
+            df = df.with_columns(
+                (pl.col('monto_pagado').fill_null(0) + pl.col('monto_reserva').fill_null(0)).alias('total')
+            )
+        else:
+            df = df.rename({metric_col: 'total'})
 
-        summarized = df.groupby(['origin_year', 'dev_year'])[metric_col].sum().reset_index()
-        summarized.rename(columns={metric_col: 'total'}, inplace=True)
-        return summarized
+        # Aggregation using Polars
+        summarized_pl = df.group_by(['origin_year', 'dev_year']).agg(
+            pl.col('total').sum()
+        ).sort(['origin_year', 'dev_year'])
+
+        return summarized_pl.to_pandas()
 
 
     def build_triangle(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
         """
         Transforms the summarized DataFrame into a triangle matrix.
+        Uses Polars for the pivot operation for extreme efficiency.
         """
-        df_sum = self.get_summarized_data(ramo, metric)
-        if df_sum.empty:
-            raise ValueError(f"No hay datos disponibles para el ramo: {ramo if ramo else 'Global'}")
+        # Get summarized data as a Polars DF
+        if self.is_summarized:
+            df_pl = pl.from_pandas(self.raw_pd)
+        else:
+            # Internal logic to get summarized Polars DF (avoiding conversion to pandas and back)
+            df = self.pl_df
+            if ramo and 'ramo' in df.columns:
+                df = df.filter(pl.col('ramo') == ramo)
 
-        # Pivot the pre-aggregated data
-        triangle = df_sum.pivot_table(
-            index='origin_year',
-            columns='dev_year',
+            if 'origin_year' not in df.columns:
+                df = df.with_columns([
+                    pl.col('fecha_ocurrencia').str.to_date(format='%d/%m/%Y', strict=False).dt.year().alias('origin_year'),
+                    (pl.col('fecha_reporte').str.to_date(format='%d/%m/%Y', strict=False).dt.year() -
+                     pl.col('fecha_ocurrencia').str.to_date(format='%d/%m/%Y', strict=False).dt.year()).alias('dev_year')
+                ])
+
+            metric_col = 'monto_pagado' if metric == 'paid' else 'monto_reserva' if metric == 'reserve' else 'total'
+            if metric_col == 'total':
+                df = df.with_columns((pl.col('monto_pagado').fill_null(0) + pl.col('monto_reserva').fill_null(0)).alias('total'))
+            else:
+                df = df.rename({metric_col: 'total'})
+
+            df_pl = df.group_by(['origin_year', 'dev_year']).agg(pl.col('total').sum())
+
+        # Perform Pivot in Polars
+        triangle_pl = df_pl.pivot(
             values='total',
-            aggfunc='sum'
-        ).fillna(0.0)
+            index='origin_year',
+            on='dev_year',
+            aggregate_function='sum'
+        ).fill_null(0.0)
 
-        return triangle
+        # Convert back to Pandas for compatibility with the rest of the engine's calculations
+        # (The IBNR calculation involves iterative loops and NumPy, which is faster in Pandas)
+        return triangle_pl.to_pandas().set_index('origin_year')
 
     def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None, method: str = 'chain_ladder', expected_loss_ratio: float = None, premiums: Dict[int, float] = None, tail_factor: float = 1.0) -> Dict[str, Any]:
         """
@@ -231,48 +257,55 @@ class ActuarialEngine:
         }
 
     def analyze_frequency_severity(self, ramo: str = None) -> Dict[str, Any]:
-        data = self.raw_df if (ramo is None or ramo == "") else self.raw_df[self.raw_df['ramo'] == ramo] if 'ramo' in self.raw_df.columns else self.raw_df
+        # Use Polars for high-performance aggregation
+        df = self.pl_df
+        if ramo and 'ramo' in df.columns:
+            df = df.filter(pl.col('ramo') == ramo)
 
-        if 'id_poliza' not in data.columns or 'monto_pagado' not in data.columns:
+        if 'id_poliza' not in df.columns or 'monto_pagado' not in df.columns:
             return {"error": "Se requieren datos detallados (id_poliza, monto_pagado) para este análisis"}
 
-        num_siniestros = len(data)
-        num_polizas = data['id_poliza'].nunique()
-        total_pagado = data['monto_pagado'].sum()
+        num_siniestros = df.height
+        num_polizas = df['id_poliza'].n_unique()
+        total_pagado = df['monto_pagado'].sum()
+
         frecuencia = num_siniestros / num_polizas if num_polizas > 0 else 0
         severidad = total_pagado / num_siniestros if num_siniestros > 0 else 0
 
         return {
-            "frecuencia": frecuencia,
-            "severidad": severidad,
-            "total_siniestros": num_siniestros,
-            "total_polizas": num_polizas
+            "frecuencia": float(frecuencia),
+            "severidad": float(severidad),
+            "total_siniestros": int(num_siniestros),
+            "total_polizas": int(num_polizas)
         }
 
     def analyze_severity_distribution(self, ramo: str = None) -> Dict[str, Any]:
-        data = self.raw_df if (ramo is None or ramo == "") else self.raw_df[self.raw_df['ramo'] == ramo] if 'ramo' in self.raw_df.columns else self.raw_df
+        df = self.pl_df
+        if ramo and 'ramo' in df.columns:
+            df = df.filter(pl.col('ramo') == ramo)
 
-        if 'monto_pagado' not in data.columns:
+        if 'monto_pagado' not in df.columns:
             return {"error": "Se requieren datos detallados (monto_pagado) para este análisis"}
 
-        severities = data['monto_pagado']
-
-        if severities.empty:
+        severities = df['monto_pagado']
+        if severities.len() == 0:
             return {"error": "No hay datos suficientes"}
 
+        # Calculate Quantiles for IQR using Polars
         q1 = severities.quantile(0.25)
         q3 = severities.quantile(0.75)
         iqr = q3 - q1
         upper_bound = q3 + 1.5 * iqr
-        outliers = severities[severities > upper_bound]
+
+        outliers = severities.filter(severities > upper_bound)
 
         return {
             "mean_severity": float(severities.mean()),
             "median_severity": float(severities.median()),
             "max_severity": float(severities.max()),
-            "outlier_count": int(len(outliers)),
+            "outlier_count": int(outliers.len()),
             "outlier_sum": float(outliers.sum()),
-            "outlier_percentage": (len(outliers) / len(severities)) * 100,
+            "outlier_percentage": (outliers.len() / severities.len()) * 100,
             "upper_bound_threshold": float(upper_bound)
         }
 

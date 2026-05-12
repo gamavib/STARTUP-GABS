@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Date, ForeignKey, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, Date, ForeignKey, DateTime, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
@@ -9,6 +9,13 @@ DATABASE_URL = "postgresql://postgres:postgres@db:5432/insurance_saas"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+def set_company_session(session, company_id: int):
+    """
+    Establece la variable de sesión de PostgreSQL para Row Level Security (RLS).
+    Esta función debe ser llamada al inicio de cada request.
+    """
+    session.execute(text(f"SET app.current_company_id = {company_id}"))
 
 class Company(Base):
     __tablename__ = "companies"
