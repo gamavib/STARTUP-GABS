@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '../../../src/services/api';
 import { useRouter } from 'next/navigation';
 
@@ -12,12 +12,25 @@ const setCookie = (name: string, value: string, days = 7) => {
     document.cookie = `${name}=${value};${expires};path=/;SameSite=Lax`;
 };
 
+const deleteCookie = (name: string) => {
+    document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; SameSite=Lax`;
+};
+
 export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const router = useRouter();
+
+    useEffect(() => {
+        // Limpieza total de sesión al entrar al login para evitar bucles de redirección
+        // Borramos localStorage y Cookies para forzar un estado limpio
+        localStorage.removeItem('token');
+        localStorage.removeItem('company_id');
+        deleteCookie('token');
+        console.log('[Auth] Session cleared on login page mount');
+    }, []);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -43,6 +56,7 @@ export default function LoginPage() {
             setLoading(false);
         }
     };
+
 
     return (
         <div style={{

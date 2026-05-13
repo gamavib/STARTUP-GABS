@@ -7,9 +7,17 @@ docker-compose down && docker-compose up -d --build
 docker logs -f insurance_saas_backend
 docker logs insurance_saas_backend
 docker logs --tail 10 -f insurance_saas_backend
+docker logs --tail 10 -f insurance_saas_frontend
 docker rm -f insurance_saas_backend
 docker restart insurance_saas_backend
 docker restart insurance_saas_frontend
+
+  # 1. Detiene y elimina el contenedor del frontend
+  docker-compose stop frontend
+  docker-compose rm -f frontend
+
+  # 2. Reconstruye y levanta desde cero
+  docker-compose up -d --build frontend
 
 
   1. Detén y elimina todo (contenedores, redes e imágenes locales del proyecto):     
@@ -19,7 +27,8 @@ docker restart insurance_saas_frontend
   3. Levanta el proyecto desde cero, forzando la reconstrucción sin usar caché:      
   docker-compose up -d --build --force-recreate
   Construye las imágenes y levanta los contenedores en segundo plano
-  docker compose up -d --build 
+  docker compose up -d --build
+  docker-compose up -d frontend 
   CONSTRUIR IMAGEN SIN CACHE
   docker-compose build --no-cache
 
@@ -38,8 +47,42 @@ password123
   - Email: admin@saasactuarial.com                                                                                           
   - Password: admin1234 (Puedes cambiarla después en el sistema) 
 
+   {
+    "email": "usuario@ejemplo.com",
+    "password": "TuPasswordSeguro123",
+    "full_name": "Nombre del Usuario",
+    "company_id": "EL_ID_QUE_COPIASTE_EN_EL_PASO_1",
+    "role": "admin"
+  }
+
+
   curl -v -X POST "http://localhost:8000/token" \ -H "Content-Type: application/x-www-form-urlencoded" \ -d "username=admin@miempresa.com&password=PasswordSeguro123" 
 docker exec -it insurance_saas_db psql -U postgres -d insurance_saas
 
+  Para verificar la Compañía:
+  SELECT * FROM companies;
+
+  Para verificar el Usuario:
+  SELECT email, role, company_id FROM
+  users;
+
+
+
+  {
+    "name": "Aseguradora Global S.A.",                                                                           
+    "tax_id": "NIT-123456789-0",                                                                               
+    "admin_email": "admin@segurosglobal.com",                                                                    
+    "password": "PasswordSeguro2026!"                                                                            
+  } 
+
+admin@segurosglobal.com
+PasswordSeguro2026!
+
+
+    {                                                                                                              
+    "email": "analista@empresa.com",                                                                             
+    "password": "PasswordSeguro2026!",                                                                           
+    "role": "user"                                                                                               
+  } 
 
 

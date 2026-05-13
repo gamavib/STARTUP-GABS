@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { api } from '../../src/services/api';
-import ActuarialDashboard from '../../src/components/ActuarialDashboard';
+import { api } from '@/services/api';
+import ActuarialDashboard from '@/components/ActuarialDashboard';
 
 export default function DashboardPage() {
     const [data, setData] = useState(null);

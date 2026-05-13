@@ -14,7 +14,7 @@ from app.auth import (
     verify_password, get_password_hash, OAuth2PasswordRequestForm
 )
 from fastapi.security import OAuth2PasswordRequestForm
-from app.schemas import CompanySetup
+from app.schemas import CompanySetup, UserCreate
 
 
 app = FastAPI(title="B2B Insurance SaaS - Actuarial Core")
@@ -177,6 +177,45 @@ async def create_company(setup_data: CompanySetup, db: Session = Depends(get_db)
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+@app.post("/users", status_code=201)
+async def create_user(
+    user_data: UserCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from fastapi import status
+    # 1. Validación de Rol: Solo administradores pueden crear usuarios
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permisos suficientes para crear usuarios"
+        )
+
+    # 2. Verificar si el email ya existe
+    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="El correo electrónico ya está registrado")
+
+    try:
+        # 3. Crear el nuevo usuario vinculado a la misma compañía del administrador
+        new_user = User(
+            company_id=current_user.company_id,
+            email=user_data.email,
+            hashed_password=get_password_hash(user_data.password),
+            role=user_data.role if user_data.role else "user"
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+
+        log_action(db, current_user, "CREATE_USER", f"Creado usuario {new_user.email} con rol {new_user.role}")
+
+        return {"status": "success", "user_id": new_user.id, "email": new_user.email}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al crear usuario: {str(e)}")
+
 
 
 @app.post("/upload-csv")
