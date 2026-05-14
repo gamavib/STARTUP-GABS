@@ -63,4 +63,27 @@ Si necesitas aplicar estos cambios sobre una versión inicial del código, utili
 >    - Integra inputs numéricos en la fila de totales del triángulo para editar los LDFs y conectar esto al endpoint `POST /actuarial/calculate-ibnr` para mostrar el IBNR ajustado en tiempo real.
 >    - Crea un componente de validación con `recharts` para visualizar el error de reserva y los KPIs de precisión.
 > 
-> Asegúrate de que la base de datos sea compatible con PostgreSQL 15 y el código compatible con Python 3.12 y Pandas 2.0+."
+> Asegúrate de que la base de datos sea compatible con PostgreSQL 15 y el código compatible con Python 3.12 y Pandas 2.0+".
+
+---
+
+## 🔄 Historial de Estabilización y Recuperación (Mayo 2026)
+
+Se detectaron regresiones críticas durante el intento de implementar la "Estrategia de Optimización SaaS", lo que llevó a un proceso de rollback y re-estabilización.
+
+### 1. Rollback a Versión Estable
+- **Acción**: Regreso al commit `fc3959c` tras detectar fallos inaceptables en la funcionalidad core.
+- **Motivación**: Pérdida de la interfaz de carga de CSV, errores de hidratación masivos en el frontend y bucles de redirección infinitos en la seguridad.
+- **Documentación**: Se creó `documentacion/FALLOS_MIGRACION_SAAS.md` para registrar las lecciones aprendidas.
+
+### 2. Reestructuración Estratégica
+- **Nuevo Plan de Evolución**: Creación de `ESTRATEGIA_OPTIMIZACION_SaaS.md`, cambiando la migración masiva por un enfoque **Incremental y Validado**.
+- **Soporte Actuarial**: Unificación de la hoja de ruta técnica en `ESTRATEGIA_EVOLUCION_ACTUARIAL.md`, alineando la plataforma con los estándares de Swiss Re y Patria Re (Solvencia II, TCR, Burn-through).
+- **Actualización de Arquitectura**: El archivo `ARCHITECTURE.md` fue actualizado para reflejar la base estable actual y la ruta de migración gradual.
+
+### 3. Blindaje de Seguridad y Dependencias
+- **Migración a pnpm**: Eliminación total de la dependencia de `npm` para evitar vulnerabilidades asociadas a hacks de la plataforma. Implementación de `pnpm` mediante `corepack` en el `Dockerfile`.
+- **Corrección de Middleware**: Implementación de validación real de JWT (decodificación de payload y chequeo de expiración) en el servidor, eliminando la dependencia de la simple existencia de la cookie.
+- **Solución de Hidratación**: Implementación del patrón de montaje (`isMounted`) en componentes críticos para evitar conflictos entre el renderizado del servidor y el cliente.
+- **Saneamiento de Sesiones**: Implementación de limpieza agresiva de tokens en el `LoginPage` para romper bucles de "resurrección de sesión" desde el `localStorage`.
+ y el código compatible con Python 3.12 y Pandas 2.0+."

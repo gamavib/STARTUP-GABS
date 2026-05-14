@@ -15,7 +15,10 @@
       "Bash(docker compose up:*)",
       "Bash(docker compose ps:*)",
       "Bash(npm install:*)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(pnpm import *)",
+      "Bash(npx pnpm *)",
+      "Bash(grep \":$\")"
     ]
   }
 }

@@ -2,9 +2,9 @@
 FROM node:20-alpine as build
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN corepack enable && corepack prepare pnpm@latest --activate && pnpm install
 COPY . .
-RUN GENERATE_SOURCEMAP=false npm run build
+RUN GENERATE_SOURCEMAP=false pnpm run build
 
 # Production stage with Nginx
 FROM nginx:stable-alpine
