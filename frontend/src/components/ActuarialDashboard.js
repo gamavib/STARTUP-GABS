@@ -1,15 +1,31 @@
-import React, { useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import React from 'react';
+import ReactECharts from 'echarts-for-react';
 
 const ActuarialDashboard = ({ data, projectionData, contractDraft, onDownloadContract }) => {
     if (!data) return <div style={{textAlign: 'center', padding: '20px'}}>Cargue un archivo CSV para ver el análisis actuarial.</div>;
 
     const { ibnr, comparison, metrics, ramo } = data;
 
-    const reserveData = [
-        { name: 'Contable', value: comparison.reserva_contable },
-        { name: 'Técnica (Actuarial)', value: comparison.reserva_tecnica_actuarial },
-    ];
+    const reserveOption = {
+        title: { text: 'Comparativa de Reservas', left: 'center', textStyle: { fontSize: 16, color: '#2c3e50' } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: {
+            type: 'category',
+            data: ['Contable', 'Técnica (Actuarial)'],
+            axisLabel: { color: '#7f8c8d' }
+        },
+        yAxis: { type: 'value', axisLabel: { formatter: (value) => `$${value.toLocaleString()}` } },
+        series: [
+            {
+                name: 'Monto de Reserva',
+                type: 'bar',
+                data: [comparison.reserva_contable, comparison.reserva_tecnica_actuarial],
+                itemStyle: { color: '#3498db' },
+                barWidth: '40%'
+            }
+        ]
+    };
 
     return (
         <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
@@ -37,18 +53,8 @@ const ActuarialDashboard = ({ data, projectionData, contractDraft, onDownloadCon
             </div>
 
             <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', marginBottom: '30px' }}>
-                <h3 style={{marginTop: 0}}>Comparativa de Reservas</h3>
-                <div style={{ width: '100%', height: 300 }}>
-                    <ResponsiveContainer>
-                        <BarChart data={reserveData}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="name" />
-                            <YAxis />
-                            <Tooltip />
-                            <Legend />
-                            <Bar dataKey="value" fill="#3498db" />
-                        </BarChart>
-                    </ResponsiveContainer>
+                <div style={{ width: '100%', height: 350 }}>
+                    <ReactECharts option={reserveOption} style={{ height: '100%', width: '100%' }} />
                 </div>
             </div>
 

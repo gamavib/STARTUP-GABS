@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 pandas
+polars
+pyarrow
 chainladder
 sqlalchemy
 psycopg2-binary

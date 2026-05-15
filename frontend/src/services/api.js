@@ -103,5 +103,17 @@ export const api = {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         return response.data;
+    },
+    createUser: async ({ email, password, role, token }) => {
+        const response = await apiClient.post('/users', { email, password, role }, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        return response.data;
+    },
+    verifySession: async (token) => {
+        const response = await apiClient.get('/auth/me', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        return response.data;
     }
 };

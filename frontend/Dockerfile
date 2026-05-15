@@ -2,7 +2,7 @@
 FROM node:20-alpine as build
 WORKDIR /app
 COPY package*.json ./
-RUN corepack enable && corepack prepare pnpm@latest --activate && pnpm install
+RUN apk add --no-cache pnpm && pnpm install
 COPY . .
 RUN GENERATE_SOURCEMAP=false pnpm run build
 

@@ -10,12 +10,14 @@ docker logs --tail 10 -f insurance_saas_backend
 docker rm -f insurance_saas_backend
 docker restart insurance_saas_backend
 docker restart insurance_saas_frontend
-
+docker-compose build backend
+docker-compose up -d backend
 
   1. Detén y elimina todo (contenedores, redes e imágenes locales del proyecto):     
   docker-compose down -v --rmi all                                                      
   2. Limpia la caché de construcción de Docker:                                      
-  docker builder prune -a -f                                                           
+  docker builder prune -a -f   
+  docker system prune                                                         
   3. Levanta el proyecto desde cero, forzando la reconstrucción sin usar caché:      
   docker-compose up -d --build --force-recreate
   Construye las imágenes y levanta los contenedores en segundo plano
@@ -34,6 +36,18 @@ docker restart insurance_saas_frontend
 admin@aseguradora.com
 password123
 
-
+user@aseguradora.com
+password123
 
   curl -v -X POST "http://localhost:8000/token" \ -H "Content-Type: application/x-www-form-urlencoded" \ -d "username=admin@miempresa.com&password=PasswordSeguro123" 
+
+
+
+docker exec -it insurance_saas_db psql -U postgres -d insurance_saas
+
+  Para verificar la Compañía:
+  SELECT * FROM companies;
+
+  Para verificar el Usuario:
+  SELECT email, role, company_id FROM
+  users;

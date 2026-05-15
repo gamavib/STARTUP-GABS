@@ -5,6 +5,7 @@ import pandas as pd
 import io
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal, Company, Claim, User, AuditLog, init_db
 from app.modules.diagnostics.validator import validate_insurance_csv
@@ -14,7 +15,7 @@ from app.auth import (
     verify_password, get_password_hash, OAuth2PasswordRequestForm
 )
 from fastapi.security import OAuth2PasswordRequestForm
-from app.schemas import CompanySetup
+from app.schemas import CompanySetup, UserCreate
 
 
 app = FastAPI(title="B2B Insurance SaaS - Actuarial Core")
@@ -41,7 +42,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
         raise HTTPException(status_code=400, detail="Email o contraseña incorrectos")
 
     access_token = create_access_token(data={"sub": str(user.id)})
-    return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id}
+    return {"access_token": access_token, "token_type": "bearer", "company_id": user.company_id, "role": user.role}
 
 @app.post("/debug/test")
 async def debug_test(data: dict):
@@ -82,6 +83,37 @@ async def create_company(setup_data: CompanySetup, db: Session = Depends(get_db)
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 
+@app.post("/users")
+async def create_user(
+    user_data: UserCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo los administradores pueden crear usuarios")
+
+    try:
+        new_user = User(
+            company_id=current_user.company_id,
+            email=user_data.email,
+            hashed_password=get_password_hash(user_data.password),
+            role=user_data.role
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+
+        log_action(db, current_user, "CREATE_USER", f"Creado usuario {user_data.email} con rol {user_data.role}")
+
+        return {"status": "success", "user_id": new_user.id, "email": new_user.email}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="El correo electrónico ya está registrado")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+
 @app.post("/upload-csv")
 async def upload_csv(
     file: UploadFile = File(...),
@@ -117,6 +149,15 @@ async def upload_csv(
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0.0)
 
+    # Validate required columns
+    required_cols = ['id_siniestro', 'fecha_ocurrencia', 'fecha_reporte', 'monto_pagado', 'monto_reserva', 'ramo', 'id_poliza']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        return {"status": "error", "errors": [f"Faltan columnas obligatorias: {', '.join(missing_cols)}"]}
+
+    if df.empty:
+        return {"status": "error", "errors": ["El archivo CSV está vacío"]}
+
     validation = validate_insurance_csv(df)
 
     if not validation.is_valid:
@@ -131,11 +172,18 @@ async def upload_csv(
     inserted_count = 0
     for _, row in df.iterrows():
         try:
+            # Robust date conversion
+            occ_date = pd.to_datetime(row['fecha_ocurrencia'], dayfirst=True, errors='coerce').date()
+            rep_date = pd.to_datetime(row['fecha_reporte'], dayfirst=True, errors='coerce').date()
+
+            if occ_date is pd.NaT or rep_date is pd.NaT:
+                continue # Skip row with invalid dates
+
             claim = Claim(
                 company_id=company_id,
                 external_id=str(row['id_siniestro']),
-                occurrence_date=pd.to_datetime(row['fecha_ocurrencia'], dayfirst=True).date(),
-                report_date=pd.to_datetime(row['fecha_reporte'], dayfirst=True).date(),
+                occurrence_date=occ_date,
+                report_date=rep_date,
                 amount_paid=float(row['monto_pagado']),
                 amount_reserve=float(row['monto_reserva']),
                 ramo=str(row['ramo']),
@@ -158,6 +206,51 @@ def get_df_from_db(db: Session, company_id: int):
              'fecha_reporte': c.report_date, 'monto_pagado': c.amount_paid,
              'monto_reserva': c.amount_reserve, 'ramo': c.ramo, 'id_poliza': c.policy_id} for c in claims]
     return pd.DataFrame(data)
+
+def get_total_reserves_sql(db: Session, company_id: int, ramo: str = None):
+    """
+    Obtiene la suma total de reservas directamente desde SQL para evitar cargar el DF crudo.
+    """
+    query = db.query(func.sum(Claim.amount_reserve)).filter(Claim.company_id == company_id)
+    if ramo and ramo != "":
+        query = query.filter(Claim.ramo == ramo)
+    return query.scalar() or 0.0
+
+def get_frequency_severity_sql(db: Session, company_id: int, ramo: str = None):
+    """
+    Calcula métricas de frecuencia y severidad directamente en SQL.
+    """
+    query = db.query(
+        func.count(Claim.id).label('count'),
+        func.count(Claim.policy_id).label('unique_policies'), # Corregido de id_poliza a policy_id
+        func.sum(Claim.amount_paid).label('total_paid')
+    ).filter(Claim.company_id == company_id)
+
+    if ramo and ramo != "":
+        query = query.filter(Claim.ramo == ramo)
+
+    res = query.first()
+    # Para obtener el conteo real de pólizas únicas, hacemos una query separada para evitar errores de GROUP BY
+    num_polizas = db.query(func.count(Claim.policy_id.distinct())).filter(Claim.company_id == company_id).scalar()
+    if ramo and ramo != "":
+        num_polizas = db.query(func.count(Claim.policy_id.distinct())).filter(Claim.company_id == company_id, Claim.ramo == ramo).scalar()
+
+    return {
+        "frecuencia": (res.count / num_polizas) if res and num_polizas > 0 else 0,
+        "severidad": (res.total_paid / res.count) if res and res.count > 0 else 0,
+        "total_siniestros": res.count if res else 0,
+        "total_polizas": num_polizas if num_polizas else 0
+    }
+
+def get_severity_values_sql(db: Session, company_id: int, ramo: str = None):
+    """
+    Trae solo la columna de montos pagados para análisis de distribución, evitando cargar todo el registro.
+    """
+    query = db.query(Claim.amount_paid).filter(Claim.company_id == company_id)
+    if ramo and ramo != "":
+        query = query.filter(Claim.ramo == ramo)
+
+    return pd.DataFrame([r[0] for r in query.all()], columns=['monto_pagado'])
 
 def get_premiums_for_company(db: Session, company_id: int, ramo: str = None):
     from app.database import Premium
@@ -292,11 +385,12 @@ async def get_analysis(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is None or df_raw.empty:
+    # OPTIMIZACIÓN: Usamos datos resumidos en SQL en lugar de cargar todo el DF crudo
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df_raw)
+    engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
     premiums = get_premiums_for_company(db, current_user.company_id, target_ramo)
@@ -306,10 +400,19 @@ async def get_analysis(
         expected_loss_ratio=expected_loss_ratio,
         premiums=premiums
     )
-    comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=target_ramo)
+    # Usamos SQL para obtener la reserva contable sin cargar el DF crudo
+    reserva_contable = get_total_reserves_sql(db, current_user.company_id, target_ramo)
+    comparison = engine.compare_reserves(ibnr_results["ibnr_estimate"], ramo=target_ramo, current_reserves=reserva_contable)
 
-    metrics = engine.analyze_frequency_severity(ramo=target_ramo)
-    severity_dist = engine.analyze_severity_distribution(ramo=target_ramo)
+    # OPTIMIZACIÓN: Métricas vía SQL especializado
+    metrics = get_frequency_severity_sql(db, current_user.company_id, target_ramo)
+
+
+    # Para la distribución de severidad, traemos solo la columna necesaria
+    df_severities = get_severity_values_sql(db, current_user.company_id, target_ramo)
+    # Creamos un motor temporal solo para la distribución (ya que requiere datos crudos de severidad)
+    dist_engine = ActuarialEngine(df_severities)
+    severity_dist = dist_engine.analyze_severity_distribution(ramo=target_ramo)
 
     return {
         "company_id": current_user.company_id,
@@ -330,17 +433,24 @@ async def get_projections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is None or df_raw.empty:
+    # OPTIMIZACIÓN: Usamos datos resumidos en SQL
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df_raw)
+    engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
     simulated_ibnr = engine.calculate_ibnr(triangle, severity_multiplier=severity_adj)
-    reinsurance = engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
 
-    contract = engine.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+    # Para optimización y contrato, necesitamos datos detallados de severidad
+    df_severities = get_severity_values_sql(db, current_user.company_id, target_ramo)
+    detail_engine = ActuarialEngine(df_severities)
+
+    reinsurance = detail_engine.optimize_reinsurance(simulated_ibnr["ibnr_estimate"], capital)
+
+    contract = detail_engine.engineer_contract(ramo=target_ramo, ibnr_estimate=simulated_ibnr["ibnr_estimate"], retention=reinsurance["suggested_retention"])
+
 
     return {
         "company_id": current_user.company_id,
@@ -357,11 +467,12 @@ async def get_contract_draft(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is None or df_raw.empty:
+    # OPTIMIZACIÓN: Usamos datos resumidos en SQL
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados para generar el borrador")
 
-    engine = ActuarialEngine(df_raw)
+    engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
 
@@ -370,17 +481,23 @@ async def get_contract_draft(
 
     # Optimización de reaseguro basada en el IBNR proyectado
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
-    reinsurance = engine.optimize_reinsurance(
+
+    # Usamos datos detallados para optimización y contrato
+    df_severities = get_severity_values_sql(db, current_user.company_id, target_ramo)
+    detail_engine = ActuarialEngine(df_severities)
+
+    reinsurance = detail_engine.optimize_reinsurance(
         ibnr_estimate=simulated_ibnr["ibnr_estimate"],
         capital_limit=company.capital_limit if company else capital,
         cost_of_capital=company.cost_of_capital if company else 0.10
     )
 
-    contract_info = engine.engineer_contract(
+    contract_info = detail_engine.engineer_contract(
         ramo=target_ramo,
         ibnr_estimate=simulated_ibnr["ibnr_estimate"],
         retention=reinsurance["suggested_retention"]
     )
+
 
     draft = engine.generate_contract_draft(
         ramo=target_ramo if target_ramo else "Global",
@@ -516,19 +633,26 @@ async def calculate_custom_ibnr(
 
 @app.get("/reports/executive")
 async def get_executive_report(ramo: str = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    df_raw = get_df_from_db(db, current_user.company_id)
-    if df_raw is None or df_raw.empty:
+    # OPTIMIZACIÓN: Usamos datos resumidos en SQL
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
         raise HTTPException(status_code=404, detail="No hay datos cargados")
 
-    engine = ActuarialEngine(df_raw)
+    engine = ActuarialEngine(df_summarized)
     target_ramo = ramo if ramo else ""
     triangle = engine.build_triangle(ramo=target_ramo)
     ibnr_res = engine.calculate_ibnr(triangle)
-    comp = engine.compare_reserves(ibnr_res["ibnr_estimate"], ramo=target_ramo)
 
-    # Frequency and severity distribution require raw data
-    metrics = engine.analyze_frequency_severity(ramo=target_ramo)
-    sev_dist = engine.analyze_severity_distribution(ramo=target_ramo)
+    # Obtenemos la reserva contable vía SQL para evitar errores de datos resumidos
+    reserva_contable = get_total_reserves_sql(db, current_user.company_id, target_ramo)
+    comp = engine.compare_reserves(ibnr_res["ibnr_estimate"], ramo=target_ramo, current_reserves=reserva_contable)
+
+    # OPTIMIZACIÓN: Métricas y distribución vía SQL especializado
+    metrics = get_frequency_severity_sql(db, current_user.company_id, target_ramo)
+
+    df_severities = get_severity_values_sql(db, current_user.company_id, target_ramo)
+    dist_engine = ActuarialEngine(df_severities)
+    sev_dist = dist_engine.analyze_severity_distribution(ramo=target_ramo)
 
     return {
         "executive_summary": {

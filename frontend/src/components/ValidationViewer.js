@@ -1,5 +1,5 @@
 import React from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
+import ReactECharts from 'echarts-for-react';
 
 const ValidationViewer = ({ data, loading }) => {
     if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#3498db' }}>Cargando validaciones...</div>;
@@ -24,6 +24,33 @@ const ValidationViewer = ({ data, loading }) => {
     const series = data.data;
     const avgError = series.reduce((acc, curr) => acc + Math.abs(curr.error), 0) / series.length;
     const globalRatio = series.reduce((acc, curr) => acc + curr.ratio, 0) / series.length;
+
+    const lineOption = {
+        title: { text: 'Evolución del Error de Reserva', left: 'center', textStyle: { fontSize: 14, color: '#2c3e50' } },
+        tooltip: { trigger: 'axis' },
+        xAxis: { type: 'category', data: series.map(s => s.year), axisLabel: { color: '#7f8c8d' } },
+        yAxis: { type: 'value', axisLabel: { formatter: (v) => `$${v.toLocaleString()}` } },
+        series: [{
+            data: series.map(s => s.error),
+            type: 'line',
+            smooth: true,
+            symbolSize: 8,
+            itemStyle: { color: '#3498db' },
+            lineStyle: { width: 3 }
+        }]
+    };
+
+    const barOption = {
+        title: { text: 'Estimados vs Real por Año', left: 'center', textStyle: { fontSize: 14, color: '#2c3e50' } },
+        tooltip: { trigger: 'axis' },
+        legend: { bottom: '0' },
+        xAxis: { type: 'category', data: series.map(s => s.year), axisLabel: { color: '#7f8c8d' } },
+        yAxis: { type: 'value', axisLabel: { formatter: (v) => `$${v.toLocaleString()}` } },
+        series: [
+            { name: 'Estimado', type: 'bar', data: series.map(s => s.estimated), itemStyle: { color: '#3498db' } },
+            { name: 'Real', type: 'bar', data: series.map(s => s.actual), itemStyle: { color: '#2ecc71' } }
+        ]
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
@@ -82,16 +109,9 @@ const ValidationViewer = ({ data, loading }) => {
                     boxShadow: '0 4px 6px rgba(0,0,0,0.05)',
                     height: '400px'
                 }}>
-                    <h3 style={{ color: '#2c3e50', fontSize: '16px', marginBottom: '20px', textAlign: 'center' }}>Evolución del Error de Reserva</h3>
-                    <ResponsiveContainer width="100%" height="80%">
-                        <LineChart data={series}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="year" label={{ value: 'Año', position: 'insideBottom', offset: -5 }} />
-                            <YAxis label={{ value: 'Error ($)', angle: -90, position: 'insideLeft' }} />
-                            <Tooltip />
-                            <Line type="monotone" dataKey="error" stroke="#3498db" strokeWidth={3} dot={{ r: 6 }} />
-                        </LineChart>
-                    </ResponsiveContainer>
+                    <div style={{ width: '100%', height: '100%' }}>
+                        <ReactECharts option={lineOption} style={{ height: '100%', width: '100%' }} />
+                    </div>
                 </div>
 
                 <div style={{
@@ -101,18 +121,9 @@ const ValidationViewer = ({ data, loading }) => {
                     boxShadow: '0 4px 6px rgba(0,0,0,0.05)',
                     height: '400px'
                 }}>
-                    <h3 style={{ color: '#2c3e50', fontSize: '16px', marginBottom: '20px', textAlign: 'center' }}>Estimado vs Real por Año</h3>
-                    <ResponsiveContainer width="100%" height="80%">
-                        <BarChart data={series}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="year" />
-                            <YAxis />
-                            <Tooltip />
-                            <Legend />
-                            <Bar dataKey="estimated" name="Estimado" fill="#3498db" />
-                            <Bar dataKey="actual" name="Real" fill="#2ecc71" />
-                        </BarChart>
-                    </ResponsiveContainer>
+                    <div style={{ width: '100%', height: '100%' }}>
+                        <ReactECharts option={barOption} style={{ height: '100%', width: '100%' }} />
+                    </div>
                 </div>
             </div>
         </div>
