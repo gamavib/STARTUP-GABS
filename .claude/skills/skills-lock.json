@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "actuarial-analysis": {
+      "source": "FDU-INS/Insurance-Skills",
+      "sourceType": "github",
+      "skillPath": "skills/actuarial-analysis/SKILL.md",
+      "computedHash": "b045b741e4c83f7e94817029282de971e1119ae11d1ebbb1ab9f40801909e832"
+    },
+    "actuarial-modeling": {
+      "source": "FDU-INS/Insurance-Skills",
+      "sourceType": "github",
+      "skillPath": "skills/actuarial-modeling/SKILL.md",
+      "computedHash": "0166e2a166499b2292ab9d720c4239484ff21c506f93459c59fb206f299c6a2d"
+    },
+    "analyzing-loss-reserves": {
+      "source": "FDU-INS/Insurance-Skills",
+      "sourceType": "github",
+      "skillPath": "skills/underwriting-rules-qa-assistant/SKILL.md",
+      "computedHash": "9d09b6eb3efc2aebef16904d19f0895ac88b56d52f90f6964051ea44e192b527"
+    },
+    "analyzing-premium-pricing": {
+      "source": "FDU-INS/Insurance-Skills",
+      "sourceType": "github",
+      "skillPath": "skills/underwriting-question-list-assistant/SKILL.md",
+      "computedHash": "611fc7aa3f86d471194049fec7fcca7fa6c1b2b56c57ea09878347a4b24d5624"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
+    },
+    "fullstack-developer": {
+      "source": "shubhamsaboo/awesome-llm-apps",
+      "sourceType": "github",
+      "skillPath": "awesome_agent_skills/fullstack-developer/SKILL.md",
+      "computedHash": "d824d75875b289753740c12ba33c005a40f0d996f12d3424cabf1ef9ad4cd1a3"
+    },
+    "loss-reserve-analysis": {
+      "source": "FDU-INS/Insurance-Skills",
+      "sourceType": "github",
+      "skillPath": "skills/loss-reserve-analysis/SKILL.md",
+      "computedHash": "296d58eb14039ca6084d8c327e4dbcc39aa43b3e033bc5fc4207b4f547eeb6d9"
+    },
+    "python-expert": {
+      "source": "shubhamsaboo/awesome-llm-apps",
+      "sourceType": "github",
+      "skillPath": "awesome_agent_skills/python-expert/SKILL.md",
+      "computedHash": "502979957aa63e93b0366d357a241695181c93e739e1bb75b6410505bcc91ba9"
+    },
+    "reserving-actuary": {
+      "source": "FDU-INS/Insurance-Skills",
+      "sourceType": "github",
+      "skillPath": "skills/t81-policy-checker/SKILL.md",
+      "computedHash": "54cd7414e3127585a85a827c1b8010db0f0529202e1134fb6328406324a6bda0"
+    }
+  }
+}
