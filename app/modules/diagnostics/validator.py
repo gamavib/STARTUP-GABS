@@ -7,6 +7,20 @@ class ValidationResult(BaseModel):
     errors: List[str] = []
     row_count: int = 0
 
+def winsorize_data(df: pd.DataFrame, columns: List[str], limits: float = 0.05) -> pd.DataFrame:
+    """
+    Limpia outliers mediante Winsorización: reemplaza los valores extremos
+    por los percentiles definidos en limits (ej. 0.05 para 5% y 95%).
+    """
+    df_win = df.copy()
+    for col in columns:
+        if col in df_win.columns:
+            lower_limit = df_win[col].quantile(limits)
+            upper_limit = df_win[col].quantile(1 - limits)
+            df_win[col] = df_win[col].clip(lower=lower_limit, upper=upper_limit)
+    return df_win
+
+
 def validate_insurance_csv(df: pd.DataFrame) -> ValidationResult:
     """
     Valida que el archivo CSV cumpla con los estándares de gobernanza

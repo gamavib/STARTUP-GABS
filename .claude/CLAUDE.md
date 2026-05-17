@@ -20,6 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Install dependencies: `pnpm install`
 - Start development server: `pnpm start`
 - Build for production: `pnpm run build`
+- Run tests: `pnpm test`
+- Lint code: `pnpm run lint` (if configured)
 
 ## Architecture Overview
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactECharts from 'echarts-for-react';
+import LdfTrendViewer from './LdfTrendViewer';
 
 const ActuarialDashboard = ({ data, projectionData, contractDraft, onDownloadContract }) => {
     if (!data) return <div style={{textAlign: 'center', padding: '20px'}}>Cargue un archivo CSV para ver el análisis actuarial.</div>;
@@ -57,6 +58,8 @@ const ActuarialDashboard = ({ data, projectionData, contractDraft, onDownloadCon
                     <ReactECharts option={reserveOption} style={{ height: '100%', width: '100%' }} />
                 </div>
             </div>
+
+            <LdfTrendViewer ramo={ramo} />
 
             {projectionData && (
                 <div style={{ backgroundColor: '#edf2f7', padding: '20px', borderRadius: '8px', borderLeft: '5px solid #3498db', marginBottom: '30px' }}>

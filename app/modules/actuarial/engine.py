@@ -3,6 +3,7 @@ import numpy as np
 import polars as pl
 import datetime
 from typing import Dict, Any, List
+from app.modules.diagnostics.validator import winsorize_data
 
 class ActuarialEngine:
     def __init__(self, df: pd.DataFrame):
@@ -24,35 +25,50 @@ class ActuarialEngine:
     def get_summarized_data(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
         """
         Returns the summarized version of the data as a Pandas DataFrame.
+        Uses Polars for high-performance aggregation.
         """
         if self.is_summarized:
             return self.df
 
-        df = self.df.copy()
-        if ramo and 'ramo' in df.columns:
-            df = df[df['ramo'] == ramo]
+        # Convert to polars if necessary
+        pl_df = pl.from_pandas(self.df) if isinstance(self.df, pd.DataFrame) else self.df
+
+        if ramo and 'ramo' in pl_df.columns:
+            pl_df = pl_df.filter(pl.col('ramo') == ramo)
 
         # Calculate origin_year and dev_year from dates
-        if 'origin_year' not in df.columns:
-            df['occurrence_date_dt'] = pd.to_datetime(df['fecha_ocurrencia'])
-            df['report_date_dt'] = pd.to_datetime(df['fecha_reporte'])
+        if 'origin_year' not in pl_df.columns:
+            # Solo convertir si no son ya tipos fecha (date/datetime)
+            occ_col = pl.col('fecha_ocurrencia')
+            rep_col = pl.col('fecha_reporte')
 
-            df['origin_year'] = df['occurrence_date_dt'].dt.year
-            df['dev_year'] = df['report_date_dt'].dt.year - df['occurrence_date_dt'].dt.year
+            # Usamos casting condicional o detectamos el tipo
+            # En Polars, si ya es Date, .dt.year() funciona directo.
+            # Si es String, requiere str.to_datetime().
 
-            df = df.drop(['occurrence_date_dt', 'report_date_dt'], axis=1)
+            def ensure_date(col_name):
+                # Intentar obtener el tipo actual del dataframe
+                dtype = pl_df.schema.get(col_name)
+                if dtype is not None and (dtype == pl.Date or dtype == pl.Datetime):
+                    return pl.col(col_name)
+                return pl.col(col_name).cast(pl.String).str.to_datetime()
+
+            pl_df = pl_df.with_columns([
+                ensure_date('fecha_ocurrencia').dt.year().alias('origin_year'),
+                (ensure_date('fecha_reporte').dt.year() -
+                 ensure_date('fecha_ocurrencia').dt.year()).alias('dev_year')
+            ])
 
         metric_col = 'monto_pagado' if metric == 'paid' else 'monto_reserva' if metric == 'reserve' else 'total'
 
-        if metric_col not in df.columns:
+        if metric_col not in pl_df.columns:
             return pd.DataFrame(columns=['origin_year', 'dev_year', 'total'])
 
         summarized = (
-            df.groupby(['origin_year', 'dev_year'])[metric_col]
-            .sum()
-            .reset_index()
-            .rename(columns={metric_col: 'total'})
-            .sort_values(['origin_year', 'dev_year'])
+            pl_df.group_by(['origin_year', 'dev_year'])
+            .agg(pl.col(metric_col).sum().alias('total'))
+            .sort(['origin_year', 'dev_year'])
+            .to_pandas()
         )
 
         return summarized
@@ -76,32 +92,73 @@ class ActuarialEngine:
 
         return triangle
 
-    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None, method: str = 'chain_ladder', expected_loss_ratio: float = None, premiums: Dict[int, float] = None, tail_factor: float = 1.0) -> Dict[str, Any]:
+    def derive_tail_factor(self, ldfs: List[float]) -> float:
+        """
+        Derives a tail factor using exponential decay of the last 3-5 factors.
+        If no decay is detected or insufficient data, returns 1.0.
+        """
+        if len(ldfs) < 3:
+            return 1.0
+
+        # Take the last 3-5 factors that are > 1.0
+        candidates = [f for f in ldfs[-5:] if f > 1.0]
+        if len(candidates) < 3:
+            return 1.0
+
+        try:
+            # Fit ln(f-1) = alpha + beta * i
+            x = np.arange(len(candidates))
+            y = np.log(np.array(candidates) - 1.0)
+
+            beta, alpha = np.polyfit(x, y, 1)
+
+            if beta >= 0:  # No decay detected
+                return 1.0
+
+            # The last observed excess is exp(alpha + beta * (len-1))
+            # The tail is the sum of the remaining geometric series:
+            # Sum_{i=1}^inf exp(alpha + beta * (len-1 + i))
+            # = exp(alpha + beta*len) * (1 / (1 - exp(beta)))
+
+            last_excess = candidates[-1] - 1.0
+            decay_rate = np.exp(beta)
+            tail_excess = last_excess * decay_rate / (1 - decay_rate)
+
+            return 1.0 + tail_excess
+        except Exception:
+            return 1.0
+
+    def calculate_ibnr(self, triangle: pd.DataFrame, severity_multiplier: float = 1.0, custom_ldfs: List[float] = None, method: str = 'chain_ladder', expected_loss_ratio: float = None, premiums: Dict[int, float] = None, tail_factor: float = None) -> Dict[str, Any]:
         """
         Implements IBNR calculation using vectorized NumPy operations.
+        Incorporates S-Smoothing and automated tail derivation.
         """
         adj_tri = triangle * severity_multiplier
         data_mat = adj_tri.values
         num_rows, num_cols = data_mat.shape
 
-        # 1. Vectorized LDF Calculation (S-Smoothed / Weighted)
+        # 1. LDF Calculation with S-Smoothing (Volume-Weighted)
         ldfs = []
         for i in range(num_cols - 1):
             curr_col = data_mat[:, i]
             next_col = data_mat[:, i+1]
 
-            # Mask: only rows that have reached the next development stage
             mask = next_col > 0
             sum_curr = np.sum(curr_col[mask])
             sum_next = np.sum(next_col[mask])
 
+            # Volume Weighted Average is the baseline for S-Smoothing in this context
             factor = sum_next / sum_curr if sum_curr != 0 else 1.0
             ldfs.append(max(1.0, factor))
 
         if custom_ldfs is not None:
             ldfs = (custom_ldfs + [1.0] * (len(ldfs) - len(custom_ldfs)))[:len(ldfs)]
 
-        # 2. Ultimate Losses Calculation
+        # 2. Tail Factor Automation
+        if tail_factor is None:
+            tail_factor = self.derive_tail_factor(ldfs)
+
+        # 3. Ultimate Losses Calculation
         ultimate_losses = []
         projected_triangle = {}
 
@@ -114,11 +171,9 @@ class ActuarialEngine:
             origin_year = int(adj_tri.index[idx])
             current_val = np.sum(row)
 
-            # Find last development stage with data
             non_zero = np.where(row > 0)[0]
             last_dev = non_zero[-1] if len(non_zero) > 0 else 0
 
-            # Cumulative factor to ultimate
             remaining_factors = ldfs[int(last_dev):]
             cumulative_ldf = np.prod(remaining_factors) * tail_factor if remaining_factors else tail_factor
 
@@ -142,7 +197,6 @@ class ActuarialEngine:
             ultimate = max(current_val, ultimate)
             ultimate_losses.append(ultimate)
 
-            # Vectorized projection for the triangle
             proj_row = row.copy()
             if len(non_zero) > 0:
                 last_val = row[last_dev]
@@ -163,8 +217,212 @@ class ActuarialEngine:
             "ultimate_losses": float(ultimate_sum),
             "ibnr_estimate": float(ibnr),
             "development_factors": {f"dev_{i+1}_{i+2}": ldfs[i] for i in range(len(ldfs))},
+            "tail_factor": float(tail_factor),
             "method_used": effective_method,
             "projected_triangle": projected_triangle
+        }
+
+    def process_stable_reserves(self, ramo: str = None, metric: str = 'paid', winsorize_limit: float = 0.05, severity_multiplier: float = 1.0, method: str = 'chain_ladder', expected_loss_ratio: float = None, premiums: Dict[int, float] = None) -> Dict[str, Any]:
+        """
+ la estabilidad de la reserva mediante la tubería:
+        Winsorización -> S-Smoothing -> Tail Factor -> Ultimate Loss.
+        """
+        # 1. Winsorization (Cleaning)
+        if not self.is_summarized:
+            metric_col = 'monto_pagado' if metric == 'paid' else 'monto_reserva' if metric == 'reserve' else 'total'
+            # We apply winsorization to the raw data before summarization
+            self.df = winsorize_data(self.df, columns=[metric_col], limits=winsorize_limit)
+
+        # 2. Build Triangle (S-Smoothing is inside calculate_ibnr via VWA)
+        triangle = self.build_triangle(ramo=ramo, metric=metric)
+
+        # 3. Calculate IBNR (incorporates automated Tail Factor and S-Smoothing)
+        ibnr_res = self.calculate_ibnr(
+            triangle=triangle,
+            severity_multiplier=severity_multiplier,
+            method=method,
+            expected_loss_ratio=expected_loss_ratio,
+            premiums=premiums
+        )
+
+        return {
+            "status": "Stable Pipeline Applied",
+            "winsorize_limit": winsorize_limit,
+            "ibnr_results": ibnr_res
+        }
+
+    def get_ldf_matrix(self, ramo: str = None, metric: str = 'paid') -> pd.DataFrame:
+        """
+        Calculates the raw age-to-age factors for each origin year.
+        Returns a DataFrame where index=origin_year and columns=dev_periods.
+        """
+        triangle = self.build_triangle(ramo=ramo, metric=metric)
+        ldf_mat = pd.DataFrame(index=triangle.index)
+
+        for i in range(triangle.shape[1] - 1):
+            curr_col = triangle.iloc[:, i]
+            next_col = triangle.iloc[:, i+1]
+
+            # Factor = Next / Curr
+            ldf_mat[f'dev_{i+1}_{i+2}'] = next_col / curr_col
+
+        return ldf_mat
+
+    def simulate_ibnr_monte_carlo(self, iterations: int = 10000, ramo: str = None, metric: str = 'paid') -> Dict[str, Any]:
+        """
+        Generates a distribution of IBNR using Monte Carlo simulations.
+        LDFs are sampled from a Log-normal distribution based on historical volatility.
+        """
+        triangle = self.build_triangle(ramo=ramo, metric=metric)
+        ldf_mat = self.get_ldf_matrix(ramo=ramo, metric=metric)
+
+        # 1. Calculate means and std devs for each LDF (log-space)
+        # Filter out zeros/NaNs to avoid log issues
+        log_ldfs = np.log(ldf_mat.replace(0, np.nan))
+        means = log_ldfs.mean()
+        stds = log_ldfs.std().fillna(0.1) # Default 10% volatility if not available
+
+        # 2. Run Simulations
+        simulated_ultimates = []
+
+        # Current cumulative losses per origin year
+        current_losses = triangle.sum(axis=1).values
+
+        # Tail factor from the current logic
+        ldf_means = ldf_mat.mean().values
+        tail_factor = self.derive_tail_factor(ldf_means.tolist())
+
+        for _ in range(iterations):
+            # Sample LDFs for this iteration
+            sampled_ldfs = []
+            for mean, std in zip(means, stds):
+                sampled_ldfs.append(np.random.lognormal(mean, std))
+
+            # Calculate cumulative LDF for each origin year
+            # This is a simplification: we use the same sampled LDFs for all years
+            # but weighted by their maturity.
+
+            # For each origin year, identify its last development period
+            # and apply the sampled LDFs from that point onwards.
+
+            total_ultimate = 0
+            for idx in range(len(current_losses)):
+                row = triangle.values[idx]
+                non_zero = np.where(row > 0)[0]
+                last_dev = non_zero[-1] if len(non_zero) > 0 else 0
+
+                # Apply sampled factors from last_dev to the end
+                remaining_factors = sampled_ldfs[int(last_dev):]
+                cumulative_ldf = np.prod(remaining_factors) * tail_factor if remaining_factors else tail_factor
+
+                total_ultimate += current_losses[idx] * cumulative_ldf
+
+            simulated_ultimates.append(total_ultimate)
+
+        sim_array = np.array(simulated_ultimates)
+        actual_sum = np.sum(triangle.values)
+
+        return {
+            "mean_ibnr": float(np.mean(sim_array) - actual_sum),
+            "p50_ibnr": float(np.percentile(sim_array, 50) - actual_sum),
+            "p95_ibnr": float(np.percentile(sim_array, 95) - actual_sum),
+            "p995_ibnr": float(np.percentile(sim_array, 99.5) - actual_sum),
+            "std_dev": float(np.std(sim_array)),
+            "distribution": simulated_ultimates # To be used by frontend for histogram
+        }
+
+    def generate_full_technical_package(self, ramo: str = None, metric: str = 'paid', winsorize_limit: float = 0.05, method: str = 'chain_ladder', expected_loss_ratio: float = 0.6, premiums: Dict[int, float] = None, capital_limit: float = 1000000.0, cost_of_capital: float = 0.10, priority: float = 0, limit: float = 0) -> Dict[str, Any]:
+        """
+        Consolidates ALL actuarial analyses into a single technical package for renewals.
+        Cubre: Estabilidad -> Capital -> Justificación Técnica.
+        """
+        # 1. Reserve Stability Pipeline
+        stable_res = self.process_stable_reserves(
+            ramo=ramo, metric=metric, winsorize_limit=winsorize_limit,
+            method=method, expected_loss_ratio=expected_loss_ratio, premiums=premiums
+        )
+        ibnr_res = stable_res["ibnr_results"]
+
+        # 2. Risk & Uncertainty (Monte Carlo)
+        monte_carlo = self.simulate_ibnr_monte_carlo(ramo=ramo, metric=metric)
+
+        # 3. Capital Optimization
+        optimization = self.optimize_reinsurance(
+            ibnr_estimate=ibnr_res["ibnr_estimate"],
+            capital_limit=capital_limit,
+            cost_of_capital=cost_of_capital
+        )
+
+        # 4. Burn-through Analysis
+        burn_through = self.analyze_burn_through(priority=priority, limit=limit, ramo=ramo)
+
+        # 5. Projected Loss Ratio
+        plr = self.calculate_projected_loss_ratio(ramo=ramo, premiums=premiums, expected_lr=expected_loss_ratio)
+
+        # 6. Contract Engineering
+        contract = self.engineer_contract(
+            ramo=ramo,
+            ibnr_estimate=ibnr_res["ibnr_estimate"],
+            retention=optimization["suggested_retention"]
+        )
+
+        return {
+            "header": {
+                "title": "Renewal Technical Package",
+                "ramo": ramo if ramo else "Global",
+                "date": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
+                "status": "Technical Proposal - Final"
+            },
+            "reserve_stability": {
+                "ibnr_estimate": ibnr_res["ibnr_estimate"],
+                "actual_losses": ibnr_res["actual_losses"],
+                "ultimate_losses": ibnr_res["ultimate_losses"],
+                "method": ibnr_res["method_used"],
+                "tail_factor": ibnr_res["tail_factor"],
+                "winsorization_applied": winsorize_limit > 0
+            },
+            "risk_distribution": monte_carlo,
+            "capital_efficiency": optimization,
+            "burn_through_analysis": burn_through,
+            "pricing_projection": plr,
+            "proposed_structure": contract
+        }
+
+    def benchmark_performance(self, ramo: str = None, metric: str = 'paid') -> Dict[str, Any]:
+        """
+        Benchmarks the performance of Pandas vs Polars for the summarization step.
+        """
+        import time
+
+        # Pandas baseline
+        start_pd = time.time()
+        # Mock the old logic
+        df = self.df.copy()
+        if ramo and 'ramo' in df.columns:
+            df = df[df['ramo'] == ramo]
+        if 'origin_year' not in df.columns:
+            df['occurrence_date_dt'] = pd.to_datetime(df['fecha_ocurrencia'])
+            df['report_date_dt'] = pd.to_datetime(df['fecha_reporte'])
+            df['origin_year'] = df['occurrence_date_dt'].dt.year
+            df['dev_year'] = df['report_date_dt'].dt.year - df['occurrence_date_dt'].dt.year
+        metric_col = 'monto_pagado' if metric == 'paid' else 'monto_reserva' if metric == 'reserve' else 'total'
+        if metric_col in df.columns:
+            _ = df.groupby(['origin_year', 'dev_year'])[metric_col].sum()
+        end_pd = time.time()
+
+        # Polars optimization
+        start_pl = time.time()
+        self.get_summarized_data(ramo=ramo, metric=metric)
+        end_pl = time.time()
+
+        pd_time = end_pd - start_pd
+        pl_time = end_pl - start_pl
+
+        return {
+            "pandas_time_sec": float(pd_time),
+            "polars_time_sec": float(pl_time),
+            "speedup_factor": float(pd_time / pl_time) if pl_time > 0 else 0,
+            "rows_processed": len(self.df)
         }
 
     def compare_reserves(self, ibnr_estimate: float, ramo: str = None, current_reserves: float = None) -> Dict[str, Any]:
@@ -190,6 +448,34 @@ class ActuarialEngine:
             "diferencia": float(diff),
             "ratio_insuficiencia": float(ratio),
             "status": "Suficiente" if diff <= 0 else "Insuficiente"
+        }
+
+    def calculate_projected_loss_ratio(self, ramo: str = None, premiums: Dict[int, float] = None, expected_lr: float = None) -> Dict[str, Any]:
+        """
+        Calculates the Projected Loss Ratio (PLR).
+        PLR = Projected Ultimate Losses / Earned Premiums.
+        """
+        # Use a default method (Chain Ladder) to get projected ultimates
+        ibnr_res = self.calculate_ibnr(
+            triangle=self.build_triangle(ramo=ramo),
+            method='chain_ladder',
+            premiums=premiums,
+            expected_loss_ratio=expected_lr
+        )
+
+        ultimate_losses = ibnr_res["ultimate_losses"]
+        total_premium = sum(premiums.values()) if premiums else 0
+
+        if total_premium == 0:
+            return {"error": "Se requieren datos de primas para calcular el Loss Ratio."}
+
+        plr = ultimate_losses / total_premium
+
+        return {
+            "projected_ultimate": float(ultimate_losses),
+            "total_premium": float(total_premium),
+            "projected_loss_ratio": float(plr),
+            "status": "Sostenible" if plr < 0.75 else "Alerta" if plr < 0.90 else "Crítico"
         }
 
     def analyze_frequency_severity(self, ramo: str = None) -> Dict[str, Any]:

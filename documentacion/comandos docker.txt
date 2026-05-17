@@ -1,7 +1,5 @@
 CERRAR
 docker compose down
-
-
 docker-compose down && docker-compose up -d --build
 
 docker logs -f insurance_saas_backend
@@ -45,9 +43,18 @@ password123
 
 docker exec -it insurance_saas_db psql -U postgres -d insurance_saas
 
-  Para verificar la Compañía:
   SELECT * FROM companies;
+  SELECT email, role, company_id FROM users;
 
-  Para verificar el Usuario:
-  SELECT email, role, company_id FROM
-  users;
+
+/init, /plan, /context, /compact y /review 
+
+  - actuarial-analysis
+  - actuarial-modeling
+  - analyzing-loss-reserves
+  - analyzing-premium-pricing
+  - frontend-design
+  - fullstack-developer
+  - loss-reserve-analysis
+  - python-expert
+  - reserving-actuary

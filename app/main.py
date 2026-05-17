@@ -377,6 +377,123 @@ async def activate_contract(
 
     return {"status": "success", "contract_id": new_contract.id}
 
+@app.get("/actuarial/ldf-matrix")
+async def get_ldf_matrix(
+    ramo: str = Query(None),
+    metric: str = Query("paid"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo, metric)
+    if df_summarized.empty:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df_summarized)
+    ldf_mat = engine.get_ldf_matrix(ramo=ramo, metric=metric)
+
+    return {
+        "ramo": ramo if ramo else "Global",
+        "ldf_matrix": ldf_mat.to_dict()
+    }
+
+@app.post("/actuarial/stable-reserves")
+async def get_stable_reserves(
+    ramo: str = Query(None),
+    metric: str = Query("paid"),
+    winsorize_limit: float = Query(0.05),
+    method: str = Query("chain_ladder"),
+    expected_loss_ratio: float = Query(0.6),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # To apply Winsorization, we NEED the raw data, not the summarized SQL data
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is None or df_raw.empty:
+        raise HTTPException(status_code=404, detail="No hay datos crudos cargados para aplicar estabilidad")
+
+    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+    engine = ActuarialEngine(df_raw)
+
+    results = engine.process_stable_reserves(
+        ramo=ramo,
+        metric=metric,
+        winsorize_limit=winsorize_limit,
+        method=method,
+        expected_loss_ratio=expected_loss_ratio,
+        premiums=premiums
+    )
+
+    return results
+
+@app.get("/actuarial/monte-carlo")
+async def get_monte_carlo(
+    ramo: str = Query(None),
+    metric: str = Query("paid"),
+    iterations: int = Query(10000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo, metric)
+    if df_summarized.empty:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    engine = ActuarialEngine(df_summarized)
+    sim_results = engine.simulate_ibnr_monte_carlo(iterations=iterations, ramo=ramo, metric=metric)
+
+    return sim_results
+
+@app.get("/actuarial/plr")
+async def get_plr(
+    ramo: str = Query(None),
+    expected_lr: float = Query(0.6),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df_summarized = get_summarized_claims(db, current_user.company_id, ramo)
+    if df_summarized.empty:
+        raise HTTPException(status_code=404, detail="No hay datos cargados")
+
+    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+    engine = ActuarialEngine(df_summarized)
+    plr_res = engine.calculate_projected_loss_ratio(ramo=ramo, premiums=premiums, expected_lr=expected_lr)
+
+    return plr_res
+
+@app.get("/actuarial/technical-package")
+async def get_technical_package(
+    ramo: str = Query(None),
+    metric: str = Query("paid"),
+    winsorize_limit: float = Query(0.05),
+    method: str = Query("chain_ladder"),
+    expected_loss_ratio: float = Query(0.6),
+    priority: float = Query(0.0),
+    limit: float = Query(0.0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    df_raw = get_df_from_db(db, current_user.company_id)
+    if df_raw is None or df_raw.empty:
+        raise HTTPException(status_code=404, detail="No hay datos crudos cargados")
+
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    premiums = get_premiums_for_company(db, current_user.company_id, ramo)
+
+    engine = ActuarialEngine(df_raw)
+    package = engine.generate_full_technical_package(
+        ramo=ramo,
+        metric=metric,
+        winsorize_limit=winsorize_limit,
+        method=method,
+        expected_loss_ratio=expected_loss_ratio,
+        premiums=premiums,
+        capital_limit=company.capital_limit if company else 1000000.0,
+        cost_of_capital=company.cost_of_capital if company else 0.10,
+        priority=priority,
+        limit=limit
+    )
+
+    return package
+
 @app.get("/actuarial/analysis")
 async def get_analysis(
     ramo: str = Query(None),
